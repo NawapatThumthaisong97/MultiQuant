@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual Environment
+venv/
+.venv/
+env/
+
+# VS Code
+.vscode/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment Variables
+.env
+
+# Logs
+*.log
+
+# OS Files
+.DS_Store
+Thumbs.db
+
+# Data Files
+data/*.csv
+
+# Model Files
+models/*.pkl
+models/*.joblib
+models/*.h5
+models/*.pt
+
+# Backtest Results
+results/
+
+# Cache
+.cache/
