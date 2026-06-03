@@ -6,8 +6,6 @@ def add_technical_features(df):
     df["Date"] = pd.to_datetime(df["Date"])
 
 
-    print(df.columns)
-    print(df.dtypes)
 
     df["Close"] = pd.to_numeric(
         df["Close"],
@@ -57,19 +55,16 @@ def add_technical_features(df):
     df["bb_high"] = bbands.bollinger_hband()
     df["bb_low"] = bbands.bollinger_lband()
     df["bb_middle"] = bbands.bollinger_mavg()
-    
-    #future return
-    df["future_return_5d"] = (
-    df["Close"].shift(-5)
-    /
-    df["Close"]
+    df["bb_high_dist"] = (
+    df["Close"] /
+    df["bb_high"]
     - 1
     )
-    
-    #target variable
-    df["target"] = (
-    df["future_return_5d"] > 0
-    ).astype(int)
+    df["bb_low_dist"] = (
+    df["Close"] /
+    df["bb_low"]
+    - 1
+    )
     
     #EMA
     ema_20 = ta.trend.EMAIndicator(
@@ -96,5 +91,23 @@ def add_technical_features(df):
     
     
     df.dropna(inplace=True)
+    
+    return df
+    
+def add_target(
+    df,
+    horizon=5
+):
+
+    df[f"future_return_{horizon}d"] = (
+        df["Close"].shift(-horizon)
+        /
+        df["Close"]
+        - 1
+    )
+
+    df["target"] = (
+        df[f"future_return_{horizon}d"] > 0
+    ).astype(int)
 
     return df
