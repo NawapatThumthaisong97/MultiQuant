@@ -1,0 +1,16 @@
+# Data & Notebooks
+data/
+.ipynb_checkpoints/
+
+# Environments & Secrets
+venv/
+.env
+
+# Python Cache
+__pycache__/
+*.pyc
+*.pyo
+
+# OS Files
+.DS_Store
+Thumbs.db
