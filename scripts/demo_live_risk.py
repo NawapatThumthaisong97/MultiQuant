@@ -10,6 +10,12 @@ import asyncio
 import logging
 import sys
 from datetime import UTC, datetime
+from pathlib import Path
+
+# Automatically ensure project root is in sys.path so script can be run directly
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 if sys.platform == "win32":
     try:
