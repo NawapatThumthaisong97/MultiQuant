@@ -1,6 +1,7 @@
 # Data & Storage
 data/
 *.db
+*.db-*
 *.sqlite
 *.sqlite3
 
