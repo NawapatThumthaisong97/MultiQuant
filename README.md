@@ -1,68 +1,106 @@
-# MultiQuant 📈🤖
+# MultiQuant: Institutional-Grade Quantitative Trading System
 
-**MultiQuant** is an open-source project focused on **Quant ai research** applied to cryptocurrency markets, with a primary focus on **Bitcoin (BTC)**. 
+[![MultiQuant CI Pipeline](https://github.com/Xplosion97/MultiQuant/actions/workflows/ci.yml/badge.svg)](https://github.com/Xplosion97/MultiQuant/actions/workflows/ci.yml)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
+[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
+[![Type Checked: MyPy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
 
-The goal of this project is to build a complete algorithmic trading research pipeline—from data engineering and statistical backtesting to deploying Machine Learning and AI models for alpha generation in the crypto market.
+MultiQuant เป็นระบบ Quantitative Trading แบบแยกส่วน (Decoupled Modular Architecture) 6 ชั้น รองรับการประมวลผลความเร็วสูง (High-throughput), ระบบบริหารความเสี่ยงระดับสถาบัน (Risk Management), และการทดสอบอัตโนมัติ 100% ผ่าน GitHub Actions CI
 
-## 🎯 Project Objectives
-- Build a robust data pipeline for fetching and processing Bitcoin historical data.
-- Analyze market behavior, volatility, and trading volume of BTC.
-- Develop and backtest systematic trading strategies (e.g., StatArb, Trend Following).
-- Integrate AI/ML models to predict price movements and optimize trade execution.
+---
 
-## 🗂️ Project Structure (WIP)
+## 🏛️ สถาปัตยกรรมระบบ 6 ชั้น (The 6-Layer Architecture)
+
+```mermaid
+graph TD
+    subgraph L1 ["📡 Layer 1: Market Connectivity"]
+        WS[Resilient WebSocket Feed]
+        Parser[Market Data Normalizer]
+    end
+
+    subgraph L2 ["🧠 Layer 2: Alpha Engine"]
+        PolarsPipe[Polars High-Speed Pipeline]
+        Signals[Alpha Strategy & Signal Generator]
+    end
+
+    subgraph L3 ["🛡️ Layer 3: Risk & Position Sizing"]
+        RiskManager[Pre-Trade Risk Checks]
+        ATRSizer[Volatility-Based ATR Sizing]
+        DDGuard[Drawdown Circuit Breakers]
+    end
+
+    subgraph L4 ["🛒 Layer 4: Order Management System (OMS)"]
+        OMSEngine[Custom Simulated OMS]
+        SlippageModel[Fill & Slippage Simulator]
+    end
+
+    subgraph L5 ["🗄️ Layer 5: State & Persistence"]
+        SQLiteDB[(SQLite WAL Persistence)]
+        RedisCache[(Redis In-Memory Cache)]
+    end
+
+    subgraph L6 ["🚨 Layer 6: Monitoring & Alerting"]
+        Discord[Discord Webhook Alerts]
+        Grafana[Prometheus & Grafana Metrics]
+    end
+
+    WS --> Parser
+    Parser -->|Tick / Bar Events| PolarsPipe
+    PolarsPipe --> Signals
+    Signals -->|AlphaSignal| RiskManager
+    RiskManager --> ATRSizer
+    ATRSizer -->|Approved OrderRequest| OMSEngine
+    OMSEngine --> SlippageModel
+    SlippageModel -->|FillEvent| SQLiteDB
+    SlippageModel -->|FillEvent| RedisCache
+    SlippageModel -->|Alerts| Discord
+    OMSEngine -->|Metrics| Grafana
+```
+
+---
+
+## 📁 โครงสร้างโปรเจกต์ (Repository Directory)
+
 ```text
 MultiQuant/
-│
-├── data/                  # Local data storage (Ignored in Git)
-│   ├── raw/               # Raw historical BTC data
-│   └── processed/         # Cleaned and engineered features
-│
-├── notebooks/             # Jupyter notebooks for EDA and research
-│
-├── src/                   # Main source code
-│   ├── __init__.py        
-│   └── data_loader.py     # Scripts to fetch data via yfinance/APIs
-│
-├── .gitignore             # Ignored files and folders
-├── requirements.txt       # Python dependencies
-└── README.md              # Project documentation
+├── .github/workflows/ci.yml       # GitHub Actions CI (Ruff, MyPy, Matrix Pytest, Redis)
+├── config/                        # การตั้งค่าระบบ (Pydantic Settings & YAML)
+│   ├── settings.py
+├── src/
+│   ├── core/                      # Data models & EventBus (TickData, BarData, AlphaSignal, etc.)
+│   ├── layer1_connectivity/       # 📡 Layer 1: Resilient WebSocket, Feed Normalizer
+│   ├── layer2_alpha/              # 🧠 Layer 2: Polars-based Alpha Engine (Next)
+│   ├── layer3_risk/               # 🛡️ Layer 3: Volatility & ATR Position Sizer (Next)
+│   ├── layer4_oms/                # 🛒 Layer 4: Simulated Order Management System (Next)
+│   ├── layer5_state/              # 🗄️ Layer 5: SQLite WAL & Redis Cache (Next)
+│   └── layer6_monitoring/         # 🚨 Layer 6: Discord & Prometheus/Grafana (Next)
+├── research/                      # สคริปต์ Research เดิม (ML, SMC, Compare assets)
+├── tests/                         # Unit & Integration Tests ทุก Layer
+├── pyproject.toml                 # Ruff, MyPy, Pytest configurations
+└── requirements.txt               # Dependencies
+```
 
-🗺️ Roadmap & Progress (The 5 Phases)
-[ ] Phase 1: Data & Programming Foundation
+---
 
-Set up Python environment and project structure.
+## 🚀 การติดตั้งและทดสอบ (Getting Started)
 
-Fetch Bitcoin (BTC-USD) historical data using yfinance or Binance API.
+### 1. ติดตั้ง Dependencies
+```bash
+python -m venv venv
+# บน Windows
+.\venv\Scripts\activate
+# ติดตั้ง Library
+pip install -r requirements.txt
+```
 
-Perform Data Cleaning and Basic Visualization (pandas, matplotlib).
+### 2. รัน Unit Tests และตรวจคุณภาพโค้ด
+```bash
+# รัน Unit Tests พร้อมเช็ค Coverage
+pytest -v --cov=src
 
-[ ] Phase 2: Core Financial Concepts
+# รัน Linter
+ruff check .
 
-Calculate Returns, Volatility, and Drawdowns.
-
-Analyze market microstructure specific to Bitcoin.
-
-[ ] Phase 3: Strategy Development & Backtesting
-
-Develop basic baseline strategies (e.g., Moving Average Crossover, Mean Reversion).
-
-Implement a backtesting engine to evaluate historical performance.
-
-Calculate performance metrics (Sharpe Ratio, Win Rate, Max Drawdown).
-
-[ ] Phase 4: AI & ML Integration (Core Focus)
-
-Feature engineering for machine learning.
-
-Train predictive models (Time-Series forecasting, Classification for signals).
-
-Compare AI-generated signals vs. traditional statistical signals.
-
-[ ] Phase 5: Paper Trading & Live Execution
-
-Connect to a Crypto Exchange API (e.g., Binance, Bybit).
-
-Deploy models in a simulated real-time environment (Paper Trading).
-
-Implement strict Risk Management rules.
+# รัน Type Checker
+mypy src --ignore-missing-imports
+```
