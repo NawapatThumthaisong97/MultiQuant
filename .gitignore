@@ -10,6 +10,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
+*.egg-info/
+*.egg
 
 # Environments & Secrets
 venv/

@@ -24,7 +24,9 @@ def create_sample_portfolio(equity: float = 100_000.0, peak: float = 100_000.0) 
 
 def test_volatility_position_sizer_inverse_relationship():
     # 0.5% risk on $100k = $500 risk budget
-    sizer = VolatilityPositionSizer(risk_per_trade_pct=0.005, atr_multiplier=2.0, max_allocation_pct=0.25)
+    sizer = VolatilityPositionSizer(
+        risk_per_trade_pct=0.005, atr_multiplier=2.0, max_allocation_pct=0.25
+    )
     portfolio = create_sample_portfolio(100_000.0)
 
     # Low Volatility regime (ATR = $1,000 on BTC at $50,000 -> stop distance $2,000)
