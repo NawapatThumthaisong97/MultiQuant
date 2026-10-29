@@ -6,6 +6,7 @@ Color-coded for Fills, Risk Warnings, and Critical System Events.
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime
 from typing import Any
@@ -35,8 +36,23 @@ class DiscordNotifier:
         self._session: aiohttp.ClientSession | None = None
 
     async def _get_session(self) -> aiohttp.ClientSession:
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=4.0))
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if (
+            self._session is None
+            or self._session.closed
+            or (self._session._loop is not None and self._session._loop.is_closed())
+            or (current_loop is not None and self._session._loop != current_loop)
+        ):
+            if self._session and not self._session.closed:
+                try:
+                    await self._session.close()
+                except Exception:
+                    pass
+            self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5.0))
         return self._session
 
     async def close(self) -> None:
@@ -52,7 +68,7 @@ class DiscordNotifier:
         color: int = COLOR_INFO,
         fields: list[dict[str, Any]] | None = None,
     ) -> bool:
-        """Send formatted embed payload to Discord."""
+        """Send formatted embed payload to Discord with automatic retry."""
         if not self.webhook_url:
             logger.debug("Discord webhook URL not configured; alert suppressed: %s", title)
             return False
@@ -81,8 +97,20 @@ class DiscordNotifier:
                     logger.warning("Discord webhook returned status %d: %s", response.status, text)
                     return False
         except Exception as e:
-            logger.error("Failed to deliver Discord notification: %s", e)
-            return False
+            # Recreate session and retry once in case of closed loop / connection drop
+            try:
+                if self._session and not self._session.closed:
+                    await self._session.close()
+                self._session = aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=5.0))
+                async with self._session.post(self.webhook_url, json=payload) as response:
+                    return response.status in (200, 204)
+            except Exception as retry_err:
+                logger.error(
+                    "Failed to deliver Discord notification on retry: %s (Original: %s)",
+                    retry_err,
+                    e,
+                )
+                return False
 
     async def notify_startup(self, capital: float, symbols: list[str]) -> bool:
         """Send notification when trading engine starts up."""
@@ -95,6 +123,35 @@ class DiscordNotifier:
         ]
         return await self.send_embed(
             title=title, description=description, color=COLOR_INFO, fields=fields
+        )
+
+    async def notify_shutdown(
+        self,
+        final_equity: float,
+        realized_pnl: float,
+        total_trades: int = 0,
+        win_count: int = 0,
+        loss_count: int = 0,
+    ) -> bool:
+        """Send notification when trading engine shuts down."""
+        title = "🛑 MultiQuant Trading Engine Stopped"
+        description = "Quantitative trading system has ceased execution cleanly."
+        win_rate_str = (
+            f"{(win_count / total_trades * 100.0):.1f}% ({win_count}W/{loss_count}L)"
+            if total_trades > 0
+            else "0 Trades"
+        )
+        fields = [
+            {"name": "Final Equity", "value": f"${final_equity:,.2f} USD", "inline": True},
+            {
+                "name": "Session PnL",
+                "value": f"**{'+' if realized_pnl >= 0 else ''}${realized_pnl:,.2f}**",
+                "inline": True,
+            },
+            {"name": "Performance", "value": win_rate_str, "inline": True},
+        ]
+        return await self.send_embed(
+            title=title, description=description, color=COLOR_ALERT, fields=fields
         )
 
     async def notify_trade_open(

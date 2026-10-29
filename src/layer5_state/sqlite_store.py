@@ -133,9 +133,28 @@ class SQLiteStore:
         await self._db.commit()
 
     async def save_fill(self, fill: FillEvent) -> None:
-        """Persist execution fill record."""
+        """Persist execution fill record safely ensuring foreign key integrity."""
         if self._db is None:
             raise RuntimeError("Database connection is not initialized.")
+
+        # Ensure parent order exists to satisfy Foreign Key constraint
+        await self._db.execute(
+            """
+            INSERT OR IGNORE INTO orders (
+                order_id, symbol, side, order_type, quantity, price, stop_price,
+                status, client_tag, created_at, updated_at
+            ) VALUES (?, ?, ?, 'MARKET', ?, ?, NULL, 'FILLED', 'direct_fill', ?, ?);
+            """,
+            (
+                fill.order_id,
+                fill.symbol,
+                fill.side.value,
+                fill.filled_quantity,
+                fill.filled_price,
+                fill.timestamp.isoformat(),
+                fill.timestamp.isoformat(),
+            ),
+        )
 
         query = """
             INSERT INTO fills (

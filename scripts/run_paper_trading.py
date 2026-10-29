@@ -63,10 +63,15 @@ class PaperTradingApp:
         symbols: list[str] | None = None,
         initial_capital: float | None = None,
         trade_cooldown_sec: float = 60.0,  # Minimum 60s cooldown between trades per symbol
+        demo_mode: bool = False,
     ) -> None:
         self.symbols = [s.upper() for s in (symbols or ["BTCUSDT", "ETHUSDT"])]
         self.trade_cooldown_sec = trade_cooldown_sec
-        self.initial_capital = initial_capital if initial_capital is not None else settings.INITIAL_CAPITAL
+        self.initial_capital = (
+            initial_capital if initial_capital is not None else settings.INITIAL_CAPITAL
+        )
+        self.demo_mode = demo_mode
+        self._demo_executed = False
 
         self.notifier = DiscordNotifier(webhook_url=settings.DISCORD_WEBHOOK_URL)
         self.metrics = MetricsCollector(port=settings.PROMETHEUS_METRICS_PORT)
@@ -120,6 +125,11 @@ class PaperTradingApp:
         print(f"   📊 Prometheus Endpoint: http://localhost:{settings.PROMETHEUS_METRICS_PORT}/metrics")
         print("=" * 80 + "\n")
 
+        # Initialize baseline metrics in Prometheus
+        self.metrics.record_portfolio(self.portfolio, realized_pnl=0.0, unrealized_pnl=0.0)
+        for sym in self.symbols:
+            self.metrics.record_market_price(sym, 0.0, 0.0)
+
         # Send Startup Discord Alert
         await self.notifier.notify_startup(self.portfolio.total_equity, self.symbols)
 
@@ -145,8 +155,19 @@ class PaperTradingApp:
         if self.feed:
             await self.feed.disconnect()
         await self.state_mgr.shutdown()
+
+        # Send Shutdown Discord Alert
+        total_trades = self.win_count + self.loss_count
+        realized_pnl = self.oms.tracker.total_realized_pnl
+        await self.notifier.notify_shutdown(
+            final_equity=self.portfolio.total_equity,
+            realized_pnl=realized_pnl,
+            total_trades=total_trades,
+            win_count=self.win_count,
+            loss_count=self.loss_count,
+        )
         await self.notifier.close()
-        print("\n⏹️ Paper trading engine shut down cleanly.")
+        print("\n⏹️ Paper trading engine shut down cleanly. Discord shutdown alert sent.")
 
     async def _on_kline_bar(self, bar: BarData) -> None:
         """
@@ -170,6 +191,11 @@ class PaperTradingApp:
         self.metrics.record_tick(mock_tick)
         self.metrics.record_market_price(sym, current_price, self.latest_atrs.get(sym, 0.0))
         await self.state_mgr.cache_market_tick(mock_tick)
+
+        # Demo mode automated trade trigger
+        if self.demo_mode and not self._demo_executed:
+            self._demo_executed = True
+            asyncio.create_task(self._run_demo_trade_flow(sym, current_price))
 
         # 1. Update buffer with real candle data
         buf = self.buffers.get(sym)
@@ -320,13 +346,18 @@ class PaperTradingApp:
             f"(Fee: ${fill.fee:.2f} | Slippage: ${fill.slippage:.2f})"
         )
         self.metrics.record_fill(fill)
-        await self.state_mgr.record_fill(fill)
+        try:
+            await self.state_mgr.record_fill(fill)
+        except Exception as e:
+            logger.warning("Could not persist fill to SQLite state: %s", e)
 
         # 1. Update Portfolio State
         self.portfolio.positions = self.oms.get_positions()
         realized_pnl = self.oms.tracker.total_realized_pnl
         unrealized_pnl = sum(p.unrealized_pnl for p in self.portfolio.positions.values())
+        notional_held = sum(p.notional_value for p in self.portfolio.positions.values())
         self.portfolio.total_equity = self.portfolio.initial_capital + realized_pnl + unrealized_pnl
+        self.portfolio.cash = max(0.0, self.portfolio.total_equity - notional_held)
 
         # 2. Check if this fill is a CLOSE or an OPEN
         is_close_order = fill.order_id.startswith("close_") or fill.order_id in self.closing_contexts
@@ -415,11 +446,67 @@ class PaperTradingApp:
             # Push periodic portfolio valuation to Prometheus
             realized_pnl = self.oms.tracker.total_realized_pnl
             positions = self.oms.get_positions()
+            self.portfolio.positions = positions
             unrealized_pnl = sum(p.unrealized_pnl for p in positions.values())
+            notional_held = sum(p.notional_value for p in positions.values())
             self.portfolio.total_equity = self.portfolio.initial_capital + realized_pnl + unrealized_pnl
+            self.portfolio.cash = max(0.0, self.portfolio.total_equity - notional_held)
             self.metrics.record_portfolio(
                 self.portfolio, realized_pnl=realized_pnl, unrealized_pnl=unrealized_pnl
             )
+
+    async def _run_demo_trade_flow(self, sym: str, current_price: float) -> None:
+        """Runs an automated demo trade flow to instantly verify Discord alerts & Grafana sync."""
+        await asyncio.sleep(2.0)
+        print(f"\n🚀 [DEMO VERIFICATION] Triggering live test trade on {sym} @ ${current_price:,.2f}...")
+
+        atr = self.latest_atrs.get(sym, current_price * 0.006)
+        sig = AlphaSignal(
+            symbol=sym,
+            direction=SignalDirection.LONG,
+            strength=0.90,
+            strategy_name="Demo_Verification_Setup",
+            metadata={"atr": atr, "close": current_price},
+        )
+        approved_order = self.risk_manager.evaluate_signal(sig, self.portfolio, current_price)
+        if approved_order:
+            stop_dist = atr * 2.0
+            tp_dist = stop_dist * 1.5
+            self.planned_targets[approved_order.order_id] = {
+                "symbol": sym,
+                "direction": "LONG",
+                "stop_loss": current_price - stop_dist,
+                "take_profit": current_price + tp_dist,
+                "strategy": "Demo_Verification_Setup",
+            }
+            await self.oms.submit_order(approved_order, current_price=current_price)
+
+            print("⏳ [DEMO VERIFICATION] Holding position for 8 seconds to demonstrate live Grafana & Discord sync...")
+            await asyncio.sleep(8.0)
+
+            # Close position with simulated Take Profit
+            exit_price = current_price + (atr * 0.6)
+            close_order_id = f"close_{uuid.uuid4().hex[:8]}"
+            pos = self.oms.get_positions().get(sym)
+            if pos and pos.is_open:
+                self.closing_contexts[close_order_id] = {
+                    "symbol": sym,
+                    "closed_side": "LONG",
+                    "entry_price": pos.entry_price,
+                    "quantity": abs(pos.quantity),
+                    "reason": "🎯 Take Profit Triggered (Demo Test)",
+                }
+                close_order = OrderRequest(
+                    order_id=close_order_id,
+                    symbol=sym,
+                    side=OrderSide.SELL,
+                    order_type=OrderType.MARKET,
+                    quantity=abs(pos.quantity),
+                    price=exit_price,
+                    client_tag="Demo Test Exit",
+                )
+                await self.oms.submit_order(close_order, current_price=exit_price)
+                print("✅ [DEMO VERIFICATION] Test trade closed successfully!\n")
 
     def _render_dashboard(self) -> None:
         """Print clean institutional status dashboard."""
@@ -503,11 +590,18 @@ if __name__ == "__main__":
         default=60.0,
         help="Trade cooldown in seconds per asset",
     )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run an automated test trade on startup to immediately verify Discord and Grafana sync",
+    )
 
     args = parser.parse_args()
 
     chosen_capital = (
-        args.capital if args.capital is not None else (args.capital_pos if args.capital_pos is not None else settings.INITIAL_CAPITAL)
+        args.capital
+        if args.capital is not None
+        else (args.capital_pos if args.capital_pos is not None else settings.INITIAL_CAPITAL)
     )
     chosen_symbols = (
         [s.strip().upper() for s in args.symbols.split(",")]
@@ -519,6 +613,7 @@ if __name__ == "__main__":
         symbols=chosen_symbols,
         initial_capital=chosen_capital,
         trade_cooldown_sec=args.cooldown,
+        demo_mode=args.demo,
     )
     try:
         asyncio.run(app.start())
