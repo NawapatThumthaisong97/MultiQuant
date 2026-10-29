@@ -95,6 +95,76 @@ class DiscordNotifier:
         ]
         return await self.send_embed(title=title, description=description, color=COLOR_INFO, fields=fields)
 
+    async def notify_trade_open(
+        self,
+        symbol: str,
+        side: str,  # "BUY" or "SELL" (LONG / SHORT)
+        entry_price: float,
+        quantity: float,
+        position_value: float,
+        stop_loss: float,
+        take_profit: float,
+        strategy_name: str = "TrendEMA_Cross",
+        fees: float = 0.0,
+    ) -> bool:
+        """Send rich alert when a new position is OPENED."""
+        is_long = side.upper() == "BUY"
+        color = COLOR_BUY if is_long else COLOR_SELL
+        direction_emoji = "🟢 LONG" if is_long else "🔴 SHORT"
+        sl_pct = abs(entry_price - stop_loss) / entry_price * 100.0
+        tp_pct = abs(take_profit - entry_price) / entry_price * 100.0
+
+        title = f"{direction_emoji} POSITION OPENED: {symbol}"
+        description = f"Opened a new {direction_emoji} position based on **{strategy_name}** signal."
+
+        fields = [
+            {"name": "Entry Price", "value": f"${entry_price:,.2f}", "inline": True},
+            {"name": "Position Size", "value": f"{quantity:.4f} {symbol.replace('USDT', '')} (~${position_value:,.2f})", "inline": True},
+            {"name": "Order Side", "value": f"{side.upper()}", "inline": True},
+            {"name": "🛑 Stop Loss (SL)", "value": f"${stop_loss:,.2f} (-{sl_pct:.2f}%)", "inline": True},
+            {"name": "🎯 Take Profit (TP)", "value": f"${take_profit:,.2f} (+{tp_pct:.2f}%)", "inline": True},
+            {"name": "Risk : Reward", "value": "1 : 1.5", "inline": True},
+            {"name": "Execution Fee", "value": f"${fees:.2f}", "inline": True},
+        ]
+        return await self.send_embed(title=title, description=description, color=color, fields=fields)
+
+    async def notify_trade_close(
+        self,
+        symbol: str,
+        closed_side: str,  # "LONG" or "SHORT" that was closed
+        entry_price: float,
+        exit_price: float,
+        quantity: float,
+        realized_pnl: float,
+        exit_reason: str,
+        total_equity: float,
+        fees: float = 0.0,
+        slippage: float = 0.0,
+        win_count: int = 0,
+        loss_count: int = 0,
+    ) -> bool:
+        """Send rich alert when an existing position is CLOSED."""
+        is_win = realized_pnl >= 0
+        color = 0x2ECC71 if is_win else 0xE74C3C  # Bright Green for Win, Red for Loss
+        result_badge = "🏆 WIN" if is_win else "🛑 LOSS"
+        pnl_pct = (realized_pnl / (entry_price * quantity)) * 100.0 if (entry_price * quantity) > 0 else 0.0
+
+        title = f"{result_badge} POSITION CLOSED: {symbol} ({closed_side})"
+        description = f"Position closed via **{exit_reason}**"
+
+        total_trades = win_count + loss_count
+        win_rate_str = f"{(win_count / total_trades * 100.0):.1f}% ({win_count}W/{loss_count}L)" if total_trades > 0 else "N/A"
+
+        fields = [
+            {"name": "Realized PnL", "value": f"**{'+' if is_win else ''}${realized_pnl:,.2f}** ({'+' if is_win else ''}{pnl_pct:.2f}%)", "inline": True},
+            {"name": "Exit Price", "value": f"${exit_price:,.2f}", "inline": True},
+            {"name": "Entry Price", "value": f"${entry_price:,.2f}", "inline": True},
+            {"name": "Total Fees & Slip", "value": f"${fees + slippage:.2f}", "inline": True},
+            {"name": "Current Equity", "value": f"${total_equity:,.2f}", "inline": True},
+            {"name": "Track Record", "value": win_rate_str, "inline": True},
+        ]
+        return await self.send_embed(title=title, description=description, color=color, fields=fields)
+
     async def notify_fill(self, fill: FillEvent) -> bool:
         """Send notification when an order is executed."""
         color = COLOR_BUY if fill.side == OrderSide.BUY else COLOR_SELL

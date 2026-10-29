@@ -91,6 +91,10 @@ class PaperTradingApp:
         self.latest_atrs: dict[str, float] = {}
         self.last_trade_time: dict[str, float] = {}
         self.last_crossover_state: dict[str, str] = {}  # "BULLISH", "BEARISH"
+        self.planned_targets: dict[str, dict[str, Any]] = {}
+        self.closing_contexts: dict[str, dict[str, Any]] = {}
+        self.win_count: int = 0
+        self.loss_count: int = 0
         self.last_fill_summary: str = "Awaiting trade setups..."
         self.feed: BinanceWebSocketFeed | None = None
         self._running = False
@@ -152,7 +156,7 @@ class PaperTradingApp:
         current_price = bar.close
         self.latest_prices[sym] = current_price
 
-        # Update metrics tick
+        # Update metrics tick and price
         mock_tick = TickData(
             symbol=sym,
             bid_price=current_price - 0.5,
@@ -162,6 +166,7 @@ class PaperTradingApp:
             timestamp=bar.timestamp,
         )
         self.metrics.record_tick(mock_tick)
+        self.metrics.record_market_price(sym, current_price, self.latest_atrs.get(sym, 0.0))
         await self.state_mgr.cache_market_tick(mock_tick)
 
         # 1. Update buffer with real candle data
@@ -232,6 +237,24 @@ class PaperTradingApp:
                 )
                 approved_order = self.risk_manager.evaluate_signal(signal, self.portfolio, current_price)
                 if approved_order:
+                    # Calculate and cache planned institutional Stop Loss and Take Profit targets
+                    stop_dist = effective_atr * 2.0
+                    tp_dist = stop_dist * 1.5
+                    if signal_dir == SignalDirection.LONG:
+                        planned_sl = current_price - stop_dist
+                        planned_tp = current_price + tp_dist
+                    else:
+                        planned_sl = current_price + stop_dist
+                        planned_tp = current_price - tp_dist
+
+                    self.planned_targets[approved_order.order_id] = {
+                        "symbol": sym,
+                        "direction": signal_dir.value,
+                        "stop_loss": planned_sl,
+                        "take_profit": planned_tp,
+                        "strategy": "TrendEMA_Cross",
+                    }
+
                     self.last_trade_time[sym] = now
                     await self.oms.submit_order(approved_order, current_price=current_price)
 
@@ -265,8 +288,19 @@ class PaperTradingApp:
 
         if should_close:
             close_side = OrderSide.SELL if pos.side == SignalDirection.LONG else OrderSide.BUY
+            order_id = f"close_{uuid.uuid4().hex[:8]}"
+
+            # Save context for close notification
+            self.closing_contexts[order_id] = {
+                "symbol": sym,
+                "closed_side": pos.side.value if pos.side else "LONG",
+                "entry_price": pos.entry_price,
+                "quantity": abs(pos.quantity),
+                "reason": exit_reason,
+            }
+
             close_order = OrderRequest(
-                order_id=f"close_{uuid.uuid4().hex[:8]}",
+                order_id=order_id,
                 symbol=sym,
                 side=close_side,
                 order_type=OrderType.MARKET,
@@ -278,29 +312,92 @@ class PaperTradingApp:
             await self.oms.submit_order(close_order, current_price=current_price)
 
     async def _on_fill_event(self, fill: FillEvent) -> None:
-        """Process execution fill from OMS."""
+        """Process execution fill from OMS and dispatch rich OPEN/CLOSE Discord alerts."""
         self.last_fill_summary = (
             f"⚡ {fill.side.value} {fill.filled_quantity:.4f} {fill.symbol} @ ${fill.filled_price:,.2f} "
             f"(Fee: ${fill.fee:.2f} | Slippage: ${fill.slippage:.2f})"
         )
         self.metrics.record_fill(fill)
         await self.state_mgr.record_fill(fill)
-        await self.notifier.notify_fill(fill)
 
-        # Update Portfolio State
+        # 1. Update Portfolio State
         self.portfolio.positions = self.oms.get_positions()
         realized_pnl = self.oms.tracker.total_realized_pnl
         unrealized_pnl = sum(p.unrealized_pnl for p in self.portfolio.positions.values())
         self.portfolio.total_equity = self.portfolio.initial_capital + realized_pnl + unrealized_pnl
 
+        # 2. Check if this fill is a CLOSE or an OPEN
+        if fill.order_id in self.closing_contexts:
+            ctx = self.closing_contexts.pop(fill.order_id)
+            closed_side = ctx["closed_side"]
+            entry_price = ctx["entry_price"]
+            exit_price = fill.filled_price
+            qty = ctx["quantity"]
+            exit_reason = ctx["reason"]
+
+            if closed_side.upper() == "LONG":
+                trade_pnl = (exit_price - entry_price) * qty - (fill.fee + fill.slippage)
+            else:
+                trade_pnl = (entry_price - exit_price) * qty - (fill.fee + fill.slippage)
+
+            is_win = trade_pnl >= 0
+            if is_win:
+                self.win_count += 1
+            else:
+                self.loss_count += 1
+
+            self.metrics.record_trade_outcome(is_win, self.win_count, self.loss_count)
+            await self.notifier.notify_trade_close(
+                symbol=fill.symbol,
+                closed_side=closed_side,
+                entry_price=entry_price,
+                exit_price=exit_price,
+                quantity=qty,
+                realized_pnl=trade_pnl,
+                exit_reason=exit_reason,
+                total_equity=self.portfolio.total_equity,
+                fees=fill.fee,
+                slippage=fill.slippage,
+                win_count=self.win_count,
+                loss_count=self.loss_count,
+            )
+
+        elif fill.order_id in self.planned_targets:
+            target = self.planned_targets.pop(fill.order_id)
+            pos_val = fill.filled_quantity * fill.filled_price
+            await self.notifier.notify_trade_open(
+                symbol=fill.symbol,
+                side=fill.side.value,
+                entry_price=fill.filled_price,
+                quantity=fill.filled_quantity,
+                position_value=pos_val,
+                stop_loss=target["stop_loss"],
+                take_profit=target["take_profit"],
+                strategy_name=target.get("strategy", "TrendEMA_Cross"),
+                fees=fill.fee,
+            )
+        else:
+            # Fallback simple fill notification
+            await self.notifier.notify_fill(fill)
+
         await self.state_mgr.record_portfolio_snapshot(self.portfolio)
-        self.metrics.record_portfolio(self.portfolio, realized_pnl=realized_pnl)
+        self.metrics.record_portfolio(
+            self.portfolio, realized_pnl=realized_pnl, unrealized_pnl=unrealized_pnl
+        )
 
     async def _dashboard_loop(self) -> None:
         """Render clean live status dashboard to terminal every 2 seconds."""
         while self._running:
             await asyncio.sleep(2.0)
             self._render_dashboard()
+            # Push periodic portfolio valuation to Prometheus
+            realized_pnl = self.oms.tracker.total_realized_pnl
+            positions = self.oms.get_positions()
+            unrealized_pnl = sum(p.unrealized_pnl for p in positions.values())
+            self.portfolio.total_equity = self.portfolio.initial_capital + realized_pnl + unrealized_pnl
+            self.metrics.record_portfolio(
+                self.portfolio, realized_pnl=realized_pnl, unrealized_pnl=unrealized_pnl
+            )
 
     def _render_dashboard(self) -> None:
         """Print clean institutional status dashboard."""
@@ -310,6 +407,8 @@ class PaperTradingApp:
         total_equity = self.portfolio.initial_capital + realized_pnl + unrealized_pnl
 
         pnl_sign = "+" if unrealized_pnl >= 0 else "-"
+        total_trades = self.win_count + self.loss_count
+        win_rate = (self.win_count / total_trades * 100.0) if total_trades > 0 else 0.0
 
         print("\n" + "=" * 80)
         print(f"📊 MULTIQUANT PAPER TRADING MONITOR — {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}")
@@ -317,6 +416,7 @@ class PaperTradingApp:
         print(
             f"💰 Total Equity : ${total_equity:,.2f} | Cash: ${self.portfolio.cash:,.2f}\n"
             f"📈 Realized PnL : ${realized_pnl:+,.2f} | Unrealized PnL: {pnl_sign}${abs(unrealized_pnl):,.2f}\n"
+            f"🎯 Win Rate     : {win_rate:.1f}% ({self.win_count} Wins / {self.loss_count} Losses) | Trades: {total_trades}\n"
             f"🛡️ Circuit Breaker: {self.risk_manager.guard.current_status.value} (Max Drawdown: {self.portfolio.drawdown_pct * 100:.2f}%)"
         )
         print("-" * 80)

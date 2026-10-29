@@ -11,9 +11,9 @@
   "panels": [
     {
       "collapsed": false,
-      "gridPos": { "h": 6, "w": 6, "x": 0, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 0, "y": 0 },
       "id": 1,
-      "title": "Total Equity (USD)",
+      "title": "💰 Total Equity",
       "type": "stat",
       "targets": [
         {
@@ -24,15 +24,94 @@
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
-          "color": { "mode": "palette-classic" }
+          "color": { "mode": "palette-classic" },
+          "mappings": []
         }
       }
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 6, "w": 6, "x": 6, "y": 0 },
+      "gridPos": { "h": 4, "w": 4, "x": 4, "y": 0 },
       "id": 2,
-      "title": "Current Drawdown %",
+      "title": "📈 Realized PnL",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "multiquant_realized_pnl_usd",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 4, "x": 8, "y": 0 },
+      "id": 3,
+      "title": "📊 Unrealized PnL",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "multiquant_unrealized_pnl_usd",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "green", "value": 0 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 4, "x": 12, "y": 0 },
+      "id": 4,
+      "title": "🎯 Win Rate",
+      "type": "gauge",
+      "targets": [
+        {
+          "expr": "multiquant_win_rate_pct",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "red", "value": null },
+              { "color": "orange", "value": 40 },
+              { "color": "green", "value": 55 }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 4, "x": 16, "y": 0 },
+      "id": 5,
+      "title": "🛡️ Max Drawdown %",
       "type": "gauge",
       "targets": [
         {
@@ -59,13 +138,32 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 6, "w": 6, "x": 12, "y": 0 },
-      "id": 3,
-      "title": "Cumulative Realized PnL",
+      "gridPos": { "h": 4, "w": 4, "x": 20, "y": 0 },
+      "id": 6,
+      "title": "💸 Fees & Slippage",
       "type": "stat",
       "targets": [
         {
-          "expr": "multiquant_realized_pnl_usd",
+          "expr": "multiquant_fees_paid_usd_total + multiquant_slippage_paid_usd_total",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 4 },
+      "id": 7,
+      "title": "🪙 BTC/USDT Mark Price",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "multiquant_market_price_usd{symbol=\"BTCUSDT\"}",
           "refId": "A"
         }
       ],
@@ -77,13 +175,13 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 6, "w": 6, "x": 18, "y": 0 },
-      "id": 4,
-      "title": "Total Fees Paid",
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 4 },
+      "id": 8,
+      "title": "🪙 ETH/USDT Mark Price",
       "type": "stat",
       "targets": [
         {
-          "expr": "multiquant_fees_paid_usd_total",
+          "expr": "multiquant_market_price_usd{symbol=\"ETHUSDT\"}",
           "refId": "A"
         }
       ],
@@ -95,19 +193,57 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 9, "w": 16, "x": 0, "y": 6 },
-      "id": 5,
-      "title": "Portfolio Equity Curve",
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 4 },
+      "id": 9,
+      "title": "⚡ Live 1m ATR Volatility",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "multiquant_atr_volatility_usd",
+          "legendFormat": "{{symbol}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 4 },
+      "id": 10,
+      "title": "📦 Position Exposure (USD)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "multiquant_position_value_usd",
+          "legendFormat": "{{symbol}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD"
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 8 },
+      "id": 11,
+      "title": "📈 Portfolio Equity Curve vs Cash",
       "type": "timeseries",
       "targets": [
         {
           "expr": "multiquant_portfolio_equity_usd",
-          "legendFormat": "Equity (USD)",
+          "legendFormat": "Total Equity (USD)",
           "refId": "A"
         },
         {
           "expr": "multiquant_portfolio_cash_usd",
-          "legendFormat": "Cash (USD)",
+          "legendFormat": "Cash Balance (USD)",
           "refId": "B"
         }
       ],
@@ -117,16 +253,41 @@
           "custom": {
             "drawStyle": "line",
             "lineInterpolation": "smooth",
-            "lineWidth": 2
+            "lineWidth": 2,
+            "fillOpacity": 10
           }
         }
       }
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 9, "w": 8, "x": 16, "y": 6 },
-      "id": 6,
-      "title": "Execution Fills Throughput",
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
+      "id": 12,
+      "title": "🏆 Closed Trades (Wins vs Losses)",
+      "type": "stat",
+      "targets": [
+        {
+          "expr": "multiquant_trades_won_total",
+          "legendFormat": "Wins",
+          "refId": "A"
+        },
+        {
+          "expr": "multiquant_trades_lost_total",
+          "legendFormat": "Losses",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "palette-classic" }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "id": 13,
+      "title": "⚡ Execution Fills Throughput",
       "type": "timeseries",
       "targets": [
         {
@@ -143,12 +304,35 @@
           }
         }
       }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "id": 14,
+      "title": "📡 Market Tick Data Ingestion Rate",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "rate(multiquant_market_ticks_total[1m])",
+          "legendFormat": "{{symbol}} Ticks/sec",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth"
+          }
+        }
+      }
     }
   ],
   "refresh": "5s",
   "schemaVersion": 38,
   "style": "dark",
-  "tags": ["multiquant", "crypto", "trading"],
+  "tags": ["multiquant", "crypto", "trading", "institutional"],
   "time": {
     "from": "now-1h",
     "to": "now"
@@ -159,6 +343,5 @@
   "timezone": "browser",
   "title": "MultiQuant Institutional Trading Dashboard",
   "uid": "multiquant_overview",
-  "version": 1
+  "version": 2
 }
-

@@ -41,6 +41,31 @@ async def test_discord_notifier_graceful_suppression():
     res_summary = await notifier.notify_portfolio_summary(portfolio)
     assert res_summary is False
 
+    res_open = await notifier.notify_trade_open(
+        symbol="BTCUSDT",
+        side="BUY",
+        entry_price=65000.0,
+        quantity=0.1,
+        position_value=6500.0,
+        stop_loss=63500.0,
+        take_profit=67250.0,
+    )
+    assert res_open is False
+
+    res_close = await notifier.notify_trade_close(
+        symbol="BTCUSDT",
+        closed_side="LONG",
+        entry_price=65000.0,
+        exit_price=67250.0,
+        quantity=0.1,
+        realized_pnl=225.0,
+        exit_reason="Take Profit Triggered",
+        total_equity=100225.0,
+        win_count=1,
+        loss_count=0,
+    )
+    assert res_close is False
+
     await notifier.close()
 
 
