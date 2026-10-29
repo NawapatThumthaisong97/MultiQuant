@@ -327,13 +327,15 @@ class PaperTradingApp:
         self.portfolio.total_equity = self.portfolio.initial_capital + realized_pnl + unrealized_pnl
 
         # 2. Check if this fill is a CLOSE or an OPEN
-        if fill.order_id in self.closing_contexts:
-            ctx = self.closing_contexts.pop(fill.order_id)
-            closed_side = ctx["closed_side"]
-            entry_price = ctx["entry_price"]
+        is_close_order = fill.order_id.startswith("close_") or fill.order_id in self.closing_contexts
+
+        if is_close_order:
+            ctx = self.closing_contexts.pop(fill.order_id, {})
+            closed_side = ctx.get("closed_side", "LONG" if fill.side == OrderSide.SELL else "SHORT")
+            entry_price = ctx.get("entry_price", fill.filled_price)
             exit_price = fill.filled_price
-            qty = ctx["quantity"]
-            exit_reason = ctx["reason"]
+            qty = ctx.get("quantity", fill.filled_quantity)
+            exit_reason = ctx.get("reason", "Take Profit / Stop Loss Triggered")
 
             if closed_side.upper() == "LONG":
                 trade_pnl = (exit_price - entry_price) * qty - (fill.fee + fill.slippage)
@@ -347,7 +349,7 @@ class PaperTradingApp:
                 self.loss_count += 1
 
             self.metrics.record_trade_outcome(is_win, self.win_count, self.loss_count)
-            await self.notifier.notify_trade_close(
+            sent = await self.notifier.notify_trade_close(
                 symbol=fill.symbol,
                 closed_side=closed_side,
                 entry_price=entry_price,
@@ -361,24 +363,42 @@ class PaperTradingApp:
                 win_count=self.win_count,
                 loss_count=self.loss_count,
             )
+            print(
+                f"\n🔔 [Discord Alert: Trade CLOSE {'Sent' if sent else 'Suppressed'}] "
+                f"{closed_side} {fill.symbol} | PnL: ${trade_pnl:+,.2f} | Reason: {exit_reason}"
+            )
 
-        elif fill.order_id in self.planned_targets:
-            target = self.planned_targets.pop(fill.order_id)
+        else:
+            # This is an OPEN order
+            target = self.planned_targets.pop(fill.order_id, {})
             pos_val = fill.filled_quantity * fill.filled_price
-            await self.notifier.notify_trade_open(
+            atr = target.get("atr", self.latest_atrs.get(fill.symbol, fill.filled_price * 0.006))
+            stop_dist = atr * 2.0
+            tp_dist = stop_dist * 1.5
+
+            if fill.side == OrderSide.BUY:
+                stop_loss = target.get("stop_loss", fill.filled_price - stop_dist)
+                take_profit = target.get("take_profit", fill.filled_price + tp_dist)
+            else:
+                stop_loss = target.get("stop_loss", fill.filled_price + stop_dist)
+                take_profit = target.get("take_profit", fill.filled_price - tp_dist)
+
+            sent = await self.notifier.notify_trade_open(
                 symbol=fill.symbol,
                 side=fill.side.value,
                 entry_price=fill.filled_price,
                 quantity=fill.filled_quantity,
                 position_value=pos_val,
-                stop_loss=target["stop_loss"],
-                take_profit=target["take_profit"],
+                stop_loss=stop_loss,
+                take_profit=take_profit,
                 strategy_name=target.get("strategy", "TrendEMA_Cross"),
                 fees=fill.fee,
             )
-        else:
-            # Fallback simple fill notification
-            await self.notifier.notify_fill(fill)
+            print(
+                f"\n🔔 [Discord Alert: Trade OPEN {'Sent' if sent else 'Suppressed'}] "
+                f"{fill.side.value} {fill.filled_quantity:.4f} {fill.symbol} @ ${fill.filled_price:,.2f} "
+                f"(SL: ${stop_loss:,.2f} | TP: ${take_profit:,.2f})"
+            )
 
         await self.state_mgr.record_portfolio_snapshot(self.portfolio)
         self.metrics.record_portfolio(

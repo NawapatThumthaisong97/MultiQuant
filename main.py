@@ -183,7 +183,28 @@ class MultiQuantEngine:
 
         # Update Metrics & Alerts
         self.metrics.record_fill(fill)
-        await self.notifier.notify_fill(fill)
+        pos_val = fill.filled_quantity * fill.filled_price
+        stop_dist = fill.filled_price * 0.015
+        tp_dist = stop_dist * 1.5
+
+        if fill.side.value.upper() == "BUY":
+            sl = fill.filled_price - stop_dist
+            tp = fill.filled_price + tp_dist
+        else:
+            sl = fill.filled_price + stop_dist
+            tp = fill.filled_price - tp_dist
+
+        await self.notifier.notify_trade_open(
+            symbol=fill.symbol,
+            side=fill.side.value,
+            entry_price=fill.filled_price,
+            quantity=fill.filled_quantity,
+            position_value=pos_val,
+            stop_loss=sl,
+            take_profit=tp,
+            strategy_name="TrendVolatilityAlpha",
+            fees=fill.fee,
+        )
 
         # Update Portfolio State
         realized_pnl = self.oms.tracker.total_realized_pnl

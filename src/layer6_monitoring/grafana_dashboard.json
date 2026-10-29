@@ -159,7 +159,7 @@
       "collapsed": false,
       "gridPos": { "h": 4, "w": 6, "x": 0, "y": 4 },
       "id": 7,
-      "title": "🪙 BTC/USDT Mark Price",
+      "title": "🪙 BTC/USDT Spot Price",
       "type": "stat",
       "targets": [
         {
@@ -177,7 +177,7 @@
       "collapsed": false,
       "gridPos": { "h": 4, "w": 6, "x": 6, "y": 4 },
       "id": 8,
-      "title": "🪙 ETH/USDT Mark Price",
+      "title": "🪙 ETH/USDT Spot Price",
       "type": "stat",
       "targets": [
         {
@@ -231,9 +231,113 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 8 },
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 8 },
       "id": 11,
-      "title": "📈 Portfolio Equity Curve vs Cash",
+      "title": "📈 BTC/USDT Live Price Movement (USD)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "multiquant_market_price_usd{symbol=\"BTCUSDT\"}",
+          "legendFormat": "BTC/USDT Live Price",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 15
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 8 },
+      "id": 12,
+      "title": "📈 ETH/USDT Live Price Movement (USD)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "multiquant_market_price_usd{symbol=\"ETHUSDT\"}",
+          "legendFormat": "ETH/USDT Live Price",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2,
+            "fillOpacity": 15
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
+      "id": 13,
+      "title": "⚡ Market Volatility Dynamics (1m ATR)",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "multiquant_atr_volatility_usd",
+          "legendFormat": "{{symbol}} ATR ($)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "line",
+            "lineInterpolation": "smooth",
+            "lineWidth": 2
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
+      "id": 14,
+      "title": "📦 Active Position Exposure by Asset",
+      "type": "timeseries",
+      "targets": [
+        {
+          "expr": "multiquant_position_value_usd",
+          "legendFormat": "{{symbol}} Exposure ($)",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "currencyUSD",
+          "custom": {
+            "drawStyle": "bars"
+          }
+        }
+      }
+    },
+    {
+      "collapsed": false,
+      "gridPos": { "h": 8, "w": 16, "x": 0, "y": 23 },
+      "id": 15,
+      "title": "📈 Portfolio Equity Curve vs Cash Balance",
       "type": "timeseries",
       "targets": [
         {
@@ -261,8 +365,8 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 8 },
-      "id": 12,
+      "gridPos": { "h": 8, "w": 8, "x": 16, "y": 23 },
+      "id": 16,
       "title": "🏆 Closed Trades (Wins vs Losses)",
       "type": "stat",
       "targets": [
@@ -285,8 +389,8 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 16 },
-      "id": 13,
+      "gridPos": { "h": 7, "w": 12, "x": 0, "y": 31 },
+      "id": 17,
       "title": "⚡ Execution Fills Throughput",
       "type": "timeseries",
       "targets": [
@@ -307,8 +411,8 @@
     },
     {
       "collapsed": false,
-      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 16 },
-      "id": 14,
+      "gridPos": { "h": 7, "w": 12, "x": 12, "y": 31 },
+      "id": 18,
       "title": "📡 Market Tick Data Ingestion Rate",
       "type": "timeseries",
       "targets": [
@@ -343,5 +447,5 @@
   "timezone": "browser",
   "title": "MultiQuant Institutional Trading Dashboard",
   "uid": "multiquant_overview",
-  "version": 2
+  "version": 3
 }
