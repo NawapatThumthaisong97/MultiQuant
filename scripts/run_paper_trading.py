@@ -61,10 +61,12 @@ class PaperTradingApp:
     def __init__(
         self,
         symbols: list[str] | None = None,
+        initial_capital: float | None = None,
         trade_cooldown_sec: float = 60.0,  # Minimum 60s cooldown between trades per symbol
     ) -> None:
         self.symbols = [s.upper() for s in (symbols or ["BTCUSDT", "ETHUSDT"])]
         self.trade_cooldown_sec = trade_cooldown_sec
+        self.initial_capital = initial_capital if initial_capital is not None else settings.INITIAL_CAPITAL
 
         self.notifier = DiscordNotifier(webhook_url=settings.DISCORD_WEBHOOK_URL)
         self.metrics = MetricsCollector(port=settings.PROMETHEUS_METRICS_PORT)
@@ -81,10 +83,10 @@ class PaperTradingApp:
         }
 
         self.portfolio = PortfolioState(
-            total_equity=100_000.0,
-            cash=100_000.0,
-            initial_capital=100_000.0,
-            peak_equity=100_000.0,
+            total_equity=self.initial_capital,
+            cash=self.initial_capital,
+            initial_capital=self.initial_capital,
+            peak_equity=self.initial_capital,
         )
 
         self.latest_prices: dict[str, float] = {}

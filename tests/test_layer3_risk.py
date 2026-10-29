@@ -147,3 +147,20 @@ def test_pre_trade_risk_manager_max_positions_gate():
     )
     order = manager.evaluate_signal(new_signal, portfolio, current_price=60000.0)
     assert order is None
+
+
+def test_volatility_position_sizer_micro_account_fifty_dollars():
+    sizer = VolatilityPositionSizer()
+    portfolio = PortfolioState(total_equity=50.0, cash=50.0, initial_capital=50.0)
+    signal = AlphaSignal(
+        symbol="BTCUSDT",
+        direction=SignalDirection.LONG,
+        strength=1.0,
+        metadata={"atr": 480.0},
+    )
+    res = sizer.calculate_size(signal, portfolio, current_price=80000.0)
+    assert res.is_valid is True
+    # Max allocation 40% of $50 = $20 -> Qty = $20 / 80,000 = 0.00025 BTC
+    assert res.quantity == pytest.approx(0.00025, abs=0.00005)
+    assert res.quantity * 80000.0 <= 20.0
+    assert res.stop_distance == pytest.approx(480.0 * 2.0)

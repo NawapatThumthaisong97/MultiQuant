@@ -23,6 +23,7 @@ class AppSettings(BaseSettings):
     # General System
     ENV: str = Field(default="development", description="development / production")
     LOG_LEVEL: str = Field(default="INFO")
+    INITIAL_CAPITAL: float = Field(default=50.0, description="Initial portfolio capital in USD")
 
     # Layer 1: Market Connectivity
     WS_BINANCE_URL: str = Field(

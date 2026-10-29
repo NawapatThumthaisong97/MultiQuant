@@ -1,6 +1,7 @@
 """
 Volatility-Based Position Sizing.
 Implements institutional ATR-based sizing, ensuring constant dollar risk across varying market regimes.
+Supports micro accounts ($50+) with intelligent allocation capping and exchange minimums.
 """
 
 from __future__ import annotations
@@ -38,17 +39,19 @@ class VolatilityPositionSizer:
 
     def __init__(
         self,
-        risk_per_trade_pct: float = 0.015,  # 1.5% capital risk per trade
+        risk_per_trade_pct: float = 0.02,  # 2.0% capital risk per trade
         atr_multiplier: float = 2.0,  # Stop loss = 2x ATR
-        risk_reward_ratio: float = 2.0,  # Take profit = 2x Risk (4x ATR)
-        max_allocation_pct: float = 0.25,  # Maximum 25% of portfolio notional in single asset
-        min_order_usd: float = 10.0,  # Minimum order size
+        risk_reward_ratio: float = 1.5,  # Take profit = 1.5x Risk (3x ATR)
+        max_allocation_pct: float = 0.40,  # Maximum 40% of portfolio notional in single asset
+        min_order_usd: float = 5.0,  # Minimum order notional size ($5.0)
+        min_dollar_risk: float = 0.05,  # Minimum dollar risk threshold ($0.05)
     ) -> None:
         self.risk_per_trade_pct = risk_per_trade_pct
         self.atr_multiplier = atr_multiplier
         self.risk_reward_ratio = risk_reward_ratio
         self.max_allocation_pct = max_allocation_pct
         self.min_order_usd = min_order_usd
+        self.min_dollar_risk = min_dollar_risk
 
     def calculate_size(
         self,
@@ -72,7 +75,7 @@ class VolatilityPositionSizer:
         # 1. Determine Dollar Risk budget
         # Scaled by strategy confidence (strength: 0.0 to 1.0)
         dollar_risk = portfolio.total_equity * self.risk_per_trade_pct * signal.strength
-        if dollar_risk < self.min_order_usd:
+        if dollar_risk < self.min_dollar_risk:
             return SizingResult(
                 0.0,
                 0.0,
@@ -80,7 +83,7 @@ class VolatilityPositionSizer:
                 0.0,
                 0.0,
                 False,
-                f"Dollar risk ({dollar_risk:.2f}) below min threshold",
+                f"Dollar risk (${dollar_risk:.2f}) below min threshold (${self.min_dollar_risk:.2f})",
             )
 
         # 2. Determine Stop Loss and Take Profit distances
@@ -111,13 +114,23 @@ class VolatilityPositionSizer:
             )
             final_quantity = max_notional / current_price
             dollar_risk = final_quantity * stop_distance
+        elif target_notional < self.min_order_usd and self.min_order_usd <= max_notional:
+            # For micro accounts: if raw order is below exchange minimum ($5), scale to min_order_usd
+            final_quantity = self.min_order_usd / current_price
+            dollar_risk = final_quantity * stop_distance
         else:
             final_quantity = raw_quantity
 
         # Final check against minimum order size in USD
         if final_quantity * current_price < self.min_order_usd:
             return SizingResult(
-                0.0, 0.0, 0.0, 0.0, 0.0, False, "Order value below minimum USD limit"
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                0.0,
+                False,
+                f"Order value (${final_quantity * current_price:.2f}) below minimum USD limit (${self.min_order_usd:.2f})",
             )
 
         return SizingResult(

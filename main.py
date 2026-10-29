@@ -86,11 +86,12 @@ class MultiQuantEngine:
         )
 
         # Portfolio Balance Tracking
+        cap = settings.INITIAL_CAPITAL
         self.portfolio = PortfolioState(
-            total_equity=100_000.0,
-            cash=100_000.0,
-            initial_capital=100_000.0,
-            peak_equity=100_000.0,
+            total_equity=cap,
+            cash=cap,
+            initial_capital=cap,
+            peak_equity=cap,
         )
 
         self._running = False
