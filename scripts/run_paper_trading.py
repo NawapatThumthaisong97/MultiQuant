@@ -470,7 +470,56 @@ class PaperTradingApp:
 
 
 if __name__ == "__main__":
-    app = PaperTradingApp()
+    import argparse
+
+    parser = argparse.ArgumentParser(
+        description="MultiQuant Institutional Live Paper Trading",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
+    )
+    parser.add_argument(
+        "capital_pos",
+        nargs="?",
+        type=float,
+        default=None,
+        help="Initial capital in USD (e.g. 50, 100, 500)",
+    )
+    parser.add_argument(
+        "--capital",
+        "-c",
+        type=float,
+        default=None,
+        help="Initial capital in USD (e.g. --capital 50)",
+    )
+    parser.add_argument(
+        "--symbols",
+        "-s",
+        type=str,
+        default=None,
+        help="Comma-separated trading symbols (e.g. 'BTCUSDT,ETHUSDT')",
+    )
+    parser.add_argument(
+        "--cooldown",
+        type=float,
+        default=60.0,
+        help="Trade cooldown in seconds per asset",
+    )
+
+    args = parser.parse_args()
+
+    chosen_capital = (
+        args.capital if args.capital is not None else (args.capital_pos if args.capital_pos is not None else settings.INITIAL_CAPITAL)
+    )
+    chosen_symbols = (
+        [s.strip().upper() for s in args.symbols.split(",")]
+        if args.symbols
+        else settings.DEFAULT_SYMBOLS
+    )
+
+    app = PaperTradingApp(
+        symbols=chosen_symbols,
+        initial_capital=chosen_capital,
+        trade_cooldown_sec=args.cooldown,
+    )
     try:
         asyncio.run(app.start())
     except KeyboardInterrupt:
