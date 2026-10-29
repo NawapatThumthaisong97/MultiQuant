@@ -10,6 +10,7 @@ import asyncio
 import logging
 import os
 import sys
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -29,7 +30,10 @@ from src.core.models import (
     AlphaSignal,
     BarData,
     FillEvent,
+    OrderRequest,
+    OrderSide,
     OrderStatus,
+    OrderType,
     PortfolioState,
     SignalDirection,
     TickData,
@@ -94,6 +98,9 @@ class PaperTradingApp:
             print("   🔕 Discord Webhooks: DISABLED (Set DISCORD_WEBHOOK_URL in .env to enable)")
         print(f"   📈 Prometheus Metrics: http://localhost:{settings.PROMETHEUS_METRICS_PORT}/metrics")
         print("=" * 80 + "\n")
+
+        # Send Startup Discord Notification
+        await self.notifier.notify_startup(self.portfolio.total_equity, self.symbols)
 
         self.feed = BinanceWebSocketFeed(
             symbols=self.symbols,
@@ -175,6 +182,40 @@ class PaperTradingApp:
                     approved_order = self.risk_manager.evaluate_signal(signal, self.portfolio, tick.last_price)
                     if approved_order:
                         await self.oms.submit_order(approved_order, current_price=tick.last_price)
+                else:
+                    # Active Position Management: Dynamic Take Profit and Stop Loss
+                    stop_dist = max(latest_atr * 2.0, 1.0)
+                    tp_dist = stop_dist * 1.5
+
+                    should_close = False
+                    exit_reason = ""
+                    if pos.side == SignalDirection.LONG:
+                        if tick.last_price <= (pos.entry_price - stop_dist):
+                            should_close = True
+                            exit_reason = "Stop Loss"
+                        elif tick.last_price >= (pos.entry_price + tp_dist):
+                            should_close = True
+                            exit_reason = "Take Profit"
+                    elif pos.side == SignalDirection.SHORT:
+                        if tick.last_price >= (pos.entry_price + stop_dist):
+                            should_close = True
+                            exit_reason = "Stop Loss"
+                        elif tick.last_price <= (pos.entry_price - tp_dist):
+                            should_close = True
+                            exit_reason = "Take Profit"
+
+                    if should_close:
+                        close_side = OrderSide.SELL if pos.side == SignalDirection.LONG else OrderSide.BUY
+                        close_order = OrderRequest(
+                            order_id=f"close_{uuid.uuid4().hex[:8]}",
+                            symbol=sym,
+                            side=close_side,
+                            order_type=OrderType.MARKET,
+                            quantity=abs(pos.quantity),
+                            price=tick.last_price,
+                            client_tag=exit_reason,
+                        )
+                        await self.oms.submit_order(close_order, current_price=tick.last_price)
 
     async def _on_fill_event(self, fill: FillEvent) -> None:
         """Handle execution fill from OMS."""
@@ -251,3 +292,4 @@ if __name__ == "__main__":
         asyncio.run(app.start())
     except KeyboardInterrupt:
         pass
+

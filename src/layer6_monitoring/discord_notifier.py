@@ -84,6 +84,17 @@ class DiscordNotifier:
             logger.error("Failed to deliver Discord notification: %s", e)
             return False
 
+    async def notify_startup(self, capital: float, symbols: list[str]) -> bool:
+        """Send notification when trading engine starts up."""
+        title = "🚀 MultiQuant Paper Trading Engine Started"
+        description = "Quantitative trading system is now running live."
+        fields = [
+            {"name": "Initial Capital", "value": f"${capital:,.2f} USD", "inline": True},
+            {"name": "Active Symbols", "value": ", ".join(symbols), "inline": True},
+            {"name": "Mode", "value": "Paper Trading (Live Simulation)", "inline": True},
+        ]
+        return await self.send_embed(title=title, description=description, color=COLOR_INFO, fields=fields)
+
     async def notify_fill(self, fill: FillEvent) -> bool:
         """Send notification when an order is executed."""
         color = COLOR_BUY if fill.side == OrderSide.BUY else COLOR_SELL
