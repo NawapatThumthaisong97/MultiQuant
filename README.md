@@ -1,135 +1,219 @@
-# MultiQuant: Institutional-Grade Quantitative Trading System
+# MultiQuant: Institutional-Grade Quantitative Trading Framework
 
-[![MultiQuant CI Pipeline](https://github.com/Xplosion97/MultiQuant/actions/workflows/ci.yml/badge.svg)](https://github.com/Xplosion97/MultiQuant/actions/workflows/ci.yml)
-[![Python 3.11+](https://img.shields.io/badge/python-3.11%20%7C%203.12-blue.svg)](https://www.python.org/)
-[![Code Style: Ruff](https://img.shields.io/badge/code%20style-ruff-000000.svg)](https://github.com/astral-sh/ruff)
-[![Type Checked: MyPy](https://img.shields.io/badge/type%20checked-mypy-blue.svg)](https://mypy-lang.org/)
+<p align="center">
+  <a href="https://github.com/Xplosion97/MultiQuant/actions/workflows/ci.yml">
+    <img src="https://github.com/Xplosion97/MultiQuant/actions/workflows/ci.yml/badge.svg" alt="CI Pipeline Status" />
+  </a>
+  <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB.svg?logo=python&logoColor=white" alt="Python 3.11 | 3.12" />
+  <img src="https://img.shields.io/badge/code%20style-ruff-000000.svg?logo=ruff&logoColor=white" alt="Code Style: Ruff" />
+  <img src="https://img.shields.io/badge/type%20checked-mypy-blue.svg?logo=python&logoColor=white" alt="Type Checked: MyPy" />
+  <img src="https://img.shields.io/badge/tests-30%2F30%20passed-success.svg?logo=pytest&logoColor=white" alt="Tests 100% Passed" />
+  <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT" />
+</p>
 
-MultiQuant เป็นระบบ Quantitative Trading แบบแยกส่วน (Decoupled Modular Architecture) 6 ชั้น สำหรับรันการเทรดแบบ Real-time High-Throughput พร้อมระบบบริหารความเสี่ยงระดับสถาบัน (Risk Management) และการทดสอบอัตโนมัติ 100% ผ่าน GitHub Actions CI
+<p align="center">
+  <strong>An event-driven, decoupled 6-layer quantitative trading framework engineered for high-throughput crypto market data ingestion, SIMD-vectorized signal generation, mathematical risk management, and real-time observability.</strong>
+</p>
 
 ---
 
-## 🏛️ สถาปัตยกรรมระบบ 6 ชั้น (The 6 Layers)
+## 🌟 Key Highlights
+
+- **🏛️ Decoupled 6-Layer Architecture**: Strict unidirectional dependencies from Market Connectivity to Execution and State Persistence.
+- **⚡ High-Performance Vectorization**: Polars-powered technical indicators (EMA, ATR, Bollinger, SMC Swings) utilizing multi-threaded SIMD acceleration.
+- **🛡️ Institutional Risk Controls**: 5 Pre-Trade Risk Gates, Dynamic Volatility/ATR Position Sizing, and Graduated Circuit Breakers (Drawdown Guard).
+- **🛒 Order Management System (OMS)**: Realistic slippage modeling (3 bps), tiered exchange fee simulation, and real-time FIFO/weighted-average PnL accounting.
+- **🗄️ Dual-Tier Persistence**: SQLite in WAL (Write-Ahead Logging) mode via `aiosqlite` with Redis hot-caching and graceful in-memory fallback.
+- **🚨 Full-Stack Observability**: Native Prometheus HTTP metrics exporter (`:8000/metrics`), a 14-panel Grafana cockpit, and instant color-coded Discord Webhook alerts for trade entries and exits.
+
+---
+
+## 🏛️ System Architecture
 
 ```mermaid
 graph TD
     subgraph L1 ["📡 Layer 1: Market Connectivity"]
         WS[Resilient WebSocket Feed]
-        Parser[Market Data Normalizer]
+        Parser[Tick / Bar Normalizer]
     end
 
     subgraph L2 ["🧠 Layer 2: Alpha Engine"]
+        Buffer[Rolling Bar Buffer]
         PolarsPipe[Polars High-Speed Pipeline]
-        Signals[Alpha Strategy & Signal Generator]
+        Signals[Alpha Strategies & Signals]
     end
 
     subgraph L3 ["🛡️ Layer 3: Risk & Position Sizing"]
-        RiskManager[Pre-Trade Risk Checks]
-        ATRSizer[Volatility-Based ATR Sizing]
-        DDGuard[Drawdown Circuit Breakers]
+        RiskGates[5 Pre-Trade Risk Gates]
+        ATRSizer[Volatility-Based ATR Sizer]
+        CircuitBreaker[Drawdown Circuit Breakers]
     end
 
     subgraph L4 ["🛒 Layer 4: Order Management System (OMS)"]
-        OMSEngine[Custom Simulated OMS]
-        SlippageModel[Fill & Slippage Simulator]
+        OMSEngine[Simulated OMS & State Machine]
+        ExecSim[Slippage & Fee Simulator]
         Tracker[Position & PnL Accounting]
     end
 
     subgraph L5 ["🗄️ Layer 5: State & Persistence"]
         SQLiteDB[(SQLite WAL Mode)]
-        RedisCache[(Redis State Cache + RAM Fallback)]
+        RedisCache[(Redis Cache + RAM Fallback)]
     end
 
-    subgraph L6 ["🚨 Layer 6: Monitoring & Alerting"]
+    subgraph L6 ["🚨 Layer 6: Observability & Monitoring"]
         Discord[Discord Webhook Alerts]
-        Prometheus[Prometheus Metrics Exporter :8000]
-        Grafana[Grafana Live Dashboard]
+        Prometheus[Prometheus Exporter :8000]
+        Grafana[Grafana 14-Panel Cockpit]
     end
 
     WS --> Parser
-    Parser -->|Tick / Bar Events| PolarsPipe
+    Parser -->|Normalized Data| Buffer
+    Buffer --> PolarsPipe
     PolarsPipe --> Signals
-    Signals -->|AlphaSignal| RiskManager
-    RiskManager --> ATRSizer
+    Signals -->|AlphaSignal| RiskGates
+    RiskGates --> ATRSizer
+    CircuitBreaker -.->|Enforces Status| RiskGates
     ATRSizer -->|Approved OrderRequest| OMSEngine
-    OMSEngine --> SlippageModel
-    SlippageModel --> Tracker
+    OMSEngine --> ExecSim
+    ExecSim --> Tracker
     Tracker -->|Fills & Snapshots| SQLiteDB
     Tracker -->|Hot State| RedisCache
-    SlippageModel -->|Rich Embeds| Discord
-    OMSEngine -->|Metrics| Prometheus
+    ExecSim -->|Rich Open/Close Embeds| Discord
+    OMSEngine -->|Real-time Metrics| Prometheus
     Prometheus --> Grafana
 ```
 
+> 📖 **Deep Dive Documentation**: For an in-depth breakdown of every layer's design, mathematical models, and state diagrams, read [docs/MultiQuant.md](docs/MultiQuant.md).
+
 ---
 
-## 📁 โครงสร้างโปรเจกต์ (Repository Directory)
+## 🖥️ Live Paper Trading Terminal & Monitoring
 
+When executing live paper trading against Binance real-time feeds:
+
+### 1. Terminal Dashboard
 ```text
-MultiQuant/
-├── .github/workflows/ci.yml       # GitHub Actions CI (Ruff, MyPy, Matrix Pytest, Redis Service)
-├── .env.example                   # รวมการตั้งค่า Environment Variables ทุก Layer
-├── config/                        # การตั้งค่าระบบ (Pydantic Settings & YAML)
-│   ├── settings.py
-├── src/
-│   ├── core/                      # Data models & EventBus (TickData, BarData, AlphaSignal, etc.)
-│   ├── layer1_connectivity/       # 📡 Layer 1: Resilient WebSocket, Feed Normalizer
-│   ├── layer2_alpha/              # 🧠 Layer 2: Polars-based Alpha Engine (ATR, EMA, Bollinger, SMC)
-│   ├── layer3_risk/               # 🛡️ Layer 3: Volatility & ATR Position Sizer, Circuit Breaker
-│   ├── layer4_oms/                # 🛒 Layer 4: Simulated OMS, Slippage Model, PnL Accounting
-│   ├── layer5_state/              # 🗄️ Layer 5: SQLite WAL Mode & Redis Cache (In-Memory Fallback)
-│   └── layer6_monitoring/         # 🚨 Layer 6: Discord Alerts, Prometheus Exporter & Grafana
-├── scripts/
-│   └── demo_live_risk.py          # สคริปต์ทดสอบสดเชื่อมต่อ WebSocket ตลาดจริง
-├── tests/                         # Unit & Integration Tests ทุก Layer (30 Tests Passed 100%)
-├── main.py                        # ตัว Orchestrator รวม 6 Layers รันสดจริง
-├── pyproject.toml                 # Ruff, MyPy, Pytest configurations
-└── requirements.txt               # Dependencies
+================================================================================
+📊 MULTIQUANT PAPER TRADING MONITOR — 01:25:30 UTC
+================================================================================
+💰 Total Equity : $100,631.60 | Cash: $75,631.60
+📈 Realized PnL : +$650.00    | Unrealized PnL: +$18.40
+🎯 Win Rate     : 80.0% (4 Wins / 1 Losses) | Trades: 5
+🛡️ Circuit Breaker: NORMAL (Max Drawdown: 0.24%)
+--------------------------------------------------------------------------------
+🛒 ACTIVE POSITIONS:
+   • BTCUSDT : LONG  0.3080 units | Entry: $81,250.00 | Mark: $81,310.00 | PnL: +$18.48
+--------------------------------------------------------------------------------
+📡 LIVE MARKET PRICES & 1-MIN ATR VOLATILITY:
+   • BTCUSDT : $81,310.00 | 1m ATR: $512.40 | Trend: BULLISH
+   • ETHUSDT : $2,185.50  | 1m ATR: $18.20  | Trend: BEARISH
+--------------------------------------------------------------------------------
+🔔 LAST EXECUTION RECEIPT:
+   ⚡ BUY 0.3080 BTCUSDT @ $81,250.00 (Fee: $10.01 | Slippage: $7.51)
+================================================================================
 ```
 
+### 2. Rich Discord Webhook Embeds
+- **🟢 Position Open Alerts**: Broadcasts symbol, direction (LONG/SHORT), entry price, position size, Stop Loss (SL), Take Profit (TP), and Risk:Reward ratio.
+- **🏆 / 🛑 Position Close Alerts**: Broadcasts realized PnL ($ and %), exit reason, total fees & slippage, current portfolio equity, and win rate track record.
+
+### 3. Grafana 14-Panel Monitoring Cockpit
+- Real-time Equity Curve vs. Cash Balance.
+- Max Drawdown Gauge with automated warning thresholds (8% warning / 15% halt).
+- Win Rate Gauge and Trades Won vs. Lost distribution.
+- Real-time BTC & ETH mark price tickers and 1-minute ATR volatility gauges.
+
 ---
 
-## 🚀 การติดตั้งและใช้งาน (Getting Started)
+## 🚀 Quickstart
 
-### 1. ติดตั้ง Dependencies
+### 1. Clone & Install
 ```bash
+git clone https://github.com/Xplosion97/MultiQuant.git
+cd MultiQuant
+
+# Create and activate Python virtual environment
 python -m venv venv
-# บน Windows
-.\venv\Scripts\activate
-# ติดตั้ง Library พร้อมโหมด Editable Package
+.\venv\Scripts\activate   # Windows PowerShell
+# source venv/bin/activate  # macOS / Linux
+
+# Install dependencies and editable package
 pip install -r requirements.txt
 pip install -e .
 ```
 
-### 2. ตั้งค่าไฟล์ `.env`
-คัดลอกไฟล์ `.env.example` ไปเป็น `.env`:
+### 2. Configure Environment
 ```bash
+# Copy example configuration
 cp .env.example .env
 ```
+*(Optionally add your Discord Webhook URL inside `.env` to receive real-time execution alerts)*
 
-### 3. รัน Unit Tests และตรวจคุณภาพโค้ด
+### 3. Start Infrastructure Stack (Docker)
 ```bash
-# รัน Unit Tests ทั้งหมด 30 ข้อ พร้อมเช็ค Coverage
-pytest -v --cov=src
-
-# รัน Linter & Formatter ตรวจโค้ด
-ruff check .
-ruff format --check .
-
-# รัน Static Type Checker
-mypy src --ignore-missing-imports
+docker compose up -d
 ```
+This spins up:
+- **Redis 7** on port `6379`
+- **Prometheus** on port `9090` (configured to scrape MultiQuant at `:8000/metrics`)
+- **Grafana** on port `3000` (pre-configured with the MultiQuant Dashboard)
 
-### 4. รันระบบเทรด MultiQuant Live
+### 4. Run Live Paper Trading
 ```bash
-python main.py
+python scripts/run_paper_trading.py
 ```
-- ระบบจะเริ่มเปิด WebSocket สด, คำนวณสัญญาณ, ตรวจสอบความเสี่ยง, และส่งออก Metrics ทาง `http://localhost:8000/metrics`
+View the live dashboard at: **[http://localhost:3000](http://localhost:3000)** *(User: `admin` / Password: `admin`)*
 
 ---
 
-## 📈 การตั้งค่า Grafana Dashboard
-1. เปิด Grafana (`http://localhost:3000`)
-2. ไปที่ **Dashboards** $\rightarrow$ **New** $\rightarrow$ **Import**
-3. อัปโหลดไฟล์ [`src/layer6_monitoring/grafana_dashboard.json`](file:///c:/Users/Xplosion97/MultiQuant/src/layer6_monitoring/grafana_dashboard.json)
-4. คุณจะเห็น Equity Curve, Drawdown Gauge, และอัตราการ Fill ออเดอร์แบบ Real-time ทันที!
+## 🧪 Testing & Code Quality
+
+MultiQuant enforces strict code health checked by automated CI pipelines on every pull request and push:
+
+```bash
+# 1. Run full unit and integration test suite with coverage
+pytest -v --cov=src
+
+# 2. Run Ruff linter and formatter
+ruff check .
+ruff format --check .
+
+# 3. Run MyPy static type checker
+mypy src --ignore-missing-imports
+```
+
+---
+
+## 📁 Repository Structure
+
+```text
+MultiQuant/
+├── .github/workflows/ci.yml       # GitHub Actions CI matrix testing (Python 3.11/3.12)
+├── config/                        # Pydantic Settings & Prometheus configurations
+│   ├── prometheus.yml
+│   └── settings.py
+├── docs/                          # Comprehensive architectural documentation
+│   └── MultiQuant.md
+├── scripts/                       # Executable runners and live demo scripts
+│   ├── demo_live_risk.py
+│   └── run_paper_trading.py       # Live visual paper trading runner
+├── src/
+│   ├── core/                      # Immutable domain models and async EventBus
+│   ├── layer1_connectivity/       # Resilient WebSocket and market data normalizer
+│   ├── layer2_alpha/              # Polars-based vectorized indicators & alpha strategies
+│   ├── layer3_risk/               # Pre-trade risk gates, ATR sizer, & drawdown circuit breaker
+│   ├── layer4_oms/                # Order state machine, slippage simulator, & position tracker
+│   ├── layer5_state/              # SQLite WAL mode & Redis cache with memory fallback
+│   └── layer6_monitoring/         # Discord notifier, Prometheus exporter, & Grafana dashboard
+├── tests/                         # Full test suite (30/30 tests pass, 100% coverage)
+├── docker-compose.yml             # Orchestration for Redis, Prometheus, and Grafana
+├── pyproject.toml                 # Ruff, MyPy, and Pytest configuration
+├── requirements.txt               # Production and development dependencies
+└── README.md                      # Project landing page
+```
+
+---
+
+## 📜 License
+
+Distributed under the **MIT License**. See `LICENSE` for more information.
