@@ -1,7 +1,8 @@
 """
-Interactive Live Paper Trading Runner with Visual Terminal Dashboard.
-Connects all 6 layers live, executes simulated trades against real Binance feeds,
-and displays real-time portfolio metrics, positions, and live fills.
+Institutional-Grade Live Paper Trading Runner.
+Connects real-time Binance 1-minute Candlestick (Kline) streams,
+evaluates strict EMA crossovers with ATR volatility, enforces pre-trade risk gates,
+and executes realistic simulated fills with dynamic TP/SL and trade cooldowns.
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import asyncio
 import logging
 import os
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +37,7 @@ from src.core.models import (
     OrderStatus,
     OrderType,
     PortfolioState,
+    Position,
     SignalDirection,
     TickData,
 )
@@ -47,14 +50,22 @@ from src.layer5_state.state_manager import StateManager
 from src.layer6_monitoring.discord_notifier import DiscordNotifier
 from src.layer6_monitoring.metrics import MetricsCollector
 
-# Silence noisy third-party debug logs
+# Configure clean logging
 logging.basicConfig(level=logging.WARNING, format="%(asctime)s [%(levelname)s] %(message)s")
+logger = logging.getLogger("multiquant.paper_trading")
 
 
 class PaperTradingApp:
-    """Full live paper trading application with terminal visualization."""
+    """Professional live paper trading runner with visual dashboard and risk controls."""
 
-    def __init__(self) -> None:
+    def __init__(
+        self,
+        symbols: list[str] | None = None,
+        trade_cooldown_sec: float = 60.0,  # Minimum 60s cooldown between trades per symbol
+    ) -> None:
+        self.symbols = [s.upper() for s in (symbols or ["BTCUSDT", "ETHUSDT"])]
+        self.trade_cooldown_sec = trade_cooldown_sec
+
         self.notifier = DiscordNotifier(webhook_url=settings.DISCORD_WEBHOOK_URL)
         self.metrics = MetricsCollector(port=settings.PROMETHEUS_METRICS_PORT)
         self.state_mgr = StateManager(
@@ -65,9 +76,8 @@ class PaperTradingApp:
         self.oms = OMSEngine(on_fill=self._on_fill_event)
         self.risk_manager = PreTradeRiskManager()
 
-        self.symbols = ["BTCUSDT", "ETHUSDT"]
         self.buffers: dict[str, RollingBarBuffer] = {
-            s: RollingBarBuffer(maxlen=50) for s in self.symbols
+            s: RollingBarBuffer(maxlen=100) for s in self.symbols
         }
 
         self.portfolio = PortfolioState(
@@ -76,40 +86,46 @@ class PaperTradingApp:
             initial_capital=100_000.0,
             peak_equity=100_000.0,
         )
+
         self.latest_prices: dict[str, float] = {}
         self.latest_atrs: dict[str, float] = {}
-        self.last_fill_summary: str = "No fills yet. Listening for signals..."
+        self.last_trade_time: dict[str, float] = {}
+        self.last_crossover_state: dict[str, str] = {}  # "BULLISH", "BEARISH"
+        self.last_fill_summary: str = "Awaiting trade setups..."
         self.feed: BinanceWebSocketFeed | None = None
         self._running = False
 
     async def start(self) -> None:
-        """Start paper trading loop."""
+        """Initialize all layers and start the paper trading loop."""
         self._running = True
         self.metrics.start_server()
         await self.state_mgr.initialize()
 
         print("\n" + "=" * 80)
-        print("🚀 MULTIQUANT LIVE PAPER TRADING ENGINE INITIALIZED")
-        print(f"   Listening on: {self.symbols}")
-        print(f"   Initial Paper Capital: ${self.portfolio.total_equity:,.2f} USD")
+        print("🚀 MULTIQUANT INSTITUTIONAL PAPER TRADING ENGINE STARTED")
+        print(f"   Universe: {self.symbols} | Timeframe: 1-Minute Klines")
+        print(f"   Initial Capital: ${self.portfolio.total_equity:,.2f} USD")
+        print(f"   Trade Cooldown: {self.trade_cooldown_sec:.0f}s per asset")
         if settings.DISCORD_WEBHOOK_URL:
-            print("   🔔 Discord Webhooks: ENABLED (Alerts will be sent on fills)")
+            print("   🔔 Discord Alerts: ACTIVE")
         else:
-            print("   🔕 Discord Webhooks: DISABLED (Set DISCORD_WEBHOOK_URL in .env to enable)")
-        print(f"   📈 Prometheus Metrics: http://localhost:{settings.PROMETHEUS_METRICS_PORT}/metrics")
+            print("   🔕 Discord Alerts: INACTIVE (Missing DISCORD_WEBHOOK_URL in .env)")
+        print(f"   📈 Live Grafana Dashboard: http://localhost:3000")
+        print(f"   📊 Prometheus Endpoint: http://localhost:{settings.PROMETHEUS_METRICS_PORT}/metrics")
         print("=" * 80 + "\n")
 
-        # Send Startup Discord Notification
+        # Send Startup Discord Alert
         await self.notifier.notify_startup(self.portfolio.total_equity, self.symbols)
 
+        # Connect to Binance 1-Minute Kline WebSocket stream
         self.feed = BinanceWebSocketFeed(
             symbols=self.symbols,
-            stream_type="trade",
-            on_tick=self._on_tick,
+            stream_type="kline_1m",
+            on_bar=self._on_kline_bar,
         )
         await self.feed.connect()
 
-        # Start background dashboard rendering loop
+        # Start terminal dashboard rendering loop
         dashboard_task = asyncio.create_task(self._dashboard_loop())
 
         try:
@@ -124,101 +140,145 @@ class PaperTradingApp:
             await self.feed.disconnect()
         await self.state_mgr.shutdown()
         await self.notifier.close()
-        print("\n⏹️ Paper trading engine stopped cleanly.")
+        print("\n⏹️ Paper trading engine shut down cleanly.")
 
-    async def _on_tick(self, tick: TickData) -> None:
-        sym = tick.symbol
-        self.latest_prices[sym] = tick.last_price
-        self.metrics.record_tick(tick)
+    async def _on_kline_bar(self, bar: BarData) -> None:
+        """
+        Receives real-time 1-minute candlestick updates from Binance.
+        Updates price mark, evaluates resting stop loss / take profit,
+        and checks for true EMA crossovers to open new trades.
+        """
+        sym = bar.symbol
+        current_price = bar.close
+        self.latest_prices[sym] = current_price
 
+        # Update metrics tick
+        mock_tick = TickData(
+            symbol=sym,
+            bid_price=current_price - 0.5,
+            ask_price=current_price + 0.5,
+            last_price=current_price,
+            volume=bar.volume,
+            timestamp=bar.timestamp,
+        )
+        self.metrics.record_tick(mock_tick)
+        await self.state_mgr.cache_market_tick(mock_tick)
+
+        # 1. Update buffer with real candle data
         buf = self.buffers.get(sym)
         if not buf:
             return
+        buf.add_bar(bar)
 
-        # Synthesize real-time micro-bar
-        synthetic_bar = BarData(
-            symbol=sym,
-            timestamp=tick.timestamp,
-            open=tick.last_price,
-            high=tick.last_price + 0.2,
-            low=tick.last_price - 0.2,
-            close=tick.last_price,
-            volume=tick.volume,
-            timeframe="1s",
-        )
-        buf.add_bar(synthetic_bar)
+        # 2. Manage Active Position (Check Realistic Take Profit & Stop Loss)
+        pos = self.oms.get_positions().get(sym)
+        if pos is not None and pos.is_open:
+            await self._manage_open_position(sym, pos, current_price)
+            return
 
-        # Check resting stop orders in OMS
-        await self.oms.process_market_tick(tick)
+        # 3. Check Trade Cooldown
+        now = time.time()
+        last_time = self.last_trade_time.get(sym, 0.0)
+        if (now - last_time) < self.trade_cooldown_sec:
+            return
 
-        # Once buffer has enough bars, compute indicators and evaluate alpha
-        if buf.count(sym) >= 15:
+        # 4. Once buffer has enough real bars, compute indicators and evaluate Alpha
+        if buf.count(sym) >= 20:
             df = buf.to_polars(sym)
-            if df is not None:
-                df_atr = compute_atr(df, period=14)
-                df_calc = compute_ema(df_atr, period=5, column="close", out_col="ema_fast")
-                df_calc = compute_ema(df_calc, period=12, column="close", out_col="ema_slow")
+            if df is None:
+                return
 
-                latest_atr = float(df_calc["atr_14"][-1])
-                self.latest_atrs[sym] = latest_atr
+            df_atr = compute_atr(df, period=14)
+            df_calc = compute_ema(df_atr, period=7, column="close", out_col="ema_fast")
+            df_calc = compute_ema(df_calc, period=21, column="close", out_col="ema_slow")
 
-                # Simple live demo trigger: Trend crossover
-                fast_ema = float(df_calc["ema_fast"][-1])
-                slow_ema = float(df_calc["ema_slow"][-1])
-                direction = SignalDirection.LONG if fast_ema > slow_ema else SignalDirection.SHORT
+            # Calculate real ATR with minimum sensible floor (0.6% of asset price)
+            raw_atr = float(df_calc["atr_14"][-1])
+            min_atr_floor = current_price * 0.006  # e.g. ~$480 on BTC, ~$14 on ETH
+            effective_atr = max(raw_atr, min_atr_floor)
+            self.latest_atrs[sym] = effective_atr
 
-                # Check if we already have an open position for this symbol
-                pos = self.oms.get_positions().get(sym)
-                has_open_pos = pos is not None and pos.is_open
+            # True Crossover Detection
+            fast_curr = float(df_calc["ema_fast"][-1])
+            slow_curr = float(df_calc["ema_slow"][-1])
+            fast_prev = float(df_calc["ema_fast"][-2])
+            slow_prev = float(df_calc["ema_slow"][-2])
 
-                if not has_open_pos:
-                    signal = AlphaSignal(
-                        symbol=sym,
-                        direction=direction,
-                        strength=0.85,
-                        strategy_name="LiveTrendAlpha",
-                        metadata={"atr": latest_atr, "close": tick.last_price},
-                    )
-                    approved_order = self.risk_manager.evaluate_signal(signal, self.portfolio, tick.last_price)
-                    if approved_order:
-                        await self.oms.submit_order(approved_order, current_price=tick.last_price)
-                else:
-                    # Active Position Management: Dynamic Take Profit and Stop Loss
-                    stop_dist = max(latest_atr * 2.0, 1.0)
-                    tp_dist = stop_dist * 1.5
+            curr_state = "BULLISH" if fast_curr > slow_curr else "BEARISH"
+            prev_state = self.last_crossover_state.get(sym)
+            self.last_crossover_state[sym] = curr_state
 
-                    should_close = False
-                    exit_reason = ""
-                    if pos.side == SignalDirection.LONG:
-                        if tick.last_price <= (pos.entry_price - stop_dist):
-                            should_close = True
-                            exit_reason = "Stop Loss"
-                        elif tick.last_price >= (pos.entry_price + tp_dist):
-                            should_close = True
-                            exit_reason = "Take Profit"
-                    elif pos.side == SignalDirection.SHORT:
-                        if tick.last_price >= (pos.entry_price + stop_dist):
-                            should_close = True
-                            exit_reason = "Stop Loss"
-                        elif tick.last_price <= (pos.entry_price - tp_dist):
-                            should_close = True
-                            exit_reason = "Take Profit"
+            # Signal only on a FRESH crossover
+            is_golden_cross = (fast_curr > slow_curr) and (fast_prev <= slow_prev)
+            is_death_cross = (fast_curr < slow_curr) and (fast_prev >= slow_prev)
 
-                    if should_close:
-                        close_side = OrderSide.SELL if pos.side == SignalDirection.LONG else OrderSide.BUY
-                        close_order = OrderRequest(
-                            order_id=f"close_{uuid.uuid4().hex[:8]}",
-                            symbol=sym,
-                            side=close_side,
-                            order_type=OrderType.MARKET,
-                            quantity=abs(pos.quantity),
-                            price=tick.last_price,
-                            client_tag=exit_reason,
-                        )
-                        await self.oms.submit_order(close_order, current_price=tick.last_price)
+            # If this is the initial warmup bar, initialize state without trading
+            if prev_state is None:
+                return
+
+            signal_dir: SignalDirection | None = None
+            if is_golden_cross:
+                signal_dir = SignalDirection.LONG
+            elif is_death_cross:
+                signal_dir = SignalDirection.SHORT
+
+            if signal_dir is not None:
+                signal = AlphaSignal(
+                    symbol=sym,
+                    direction=signal_dir,
+                    strength=0.90,
+                    strategy_name="TrendEMA_Cross",
+                    metadata={"atr": effective_atr, "close": current_price},
+                )
+                approved_order = self.risk_manager.evaluate_signal(signal, self.portfolio, current_price)
+                if approved_order:
+                    self.last_trade_time[sym] = now
+                    await self.oms.submit_order(approved_order, current_price=current_price)
+
+    async def _manage_open_position(self, sym: str, pos: Position, current_price: float) -> None:
+        """
+        Manages an active position with institutional risk-reward boundaries.
+        Stop Loss: 2.0x ATR (~1.2% distance)
+        Take Profit: 3.0x ATR (~1.8% distance, Risk:Reward 1:1.5)
+        """
+        atr = self.latest_atrs.get(sym, current_price * 0.006)
+        stop_dist = atr * 2.0
+        tp_dist = stop_dist * 1.5
+
+        should_close = False
+        exit_reason = ""
+
+        if pos.side == SignalDirection.LONG:
+            if current_price <= (pos.entry_price - stop_dist):
+                should_close = True
+                exit_reason = f"🛑 Stop Loss Triggered (-${pos.entry_price - current_price:.2f})"
+            elif current_price >= (pos.entry_price + tp_dist):
+                should_close = True
+                exit_reason = f"🎯 Take Profit Triggered (+${current_price - pos.entry_price:.2f})"
+        elif pos.side == SignalDirection.SHORT:
+            if current_price >= (pos.entry_price + stop_dist):
+                should_close = True
+                exit_reason = f"🛑 Stop Loss Triggered (-${current_price - pos.entry_price:.2f})"
+            elif current_price <= (pos.entry_price - tp_dist):
+                should_close = True
+                exit_reason = f"🎯 Take Profit Triggered (+${pos.entry_price - current_price:.2f})"
+
+        if should_close:
+            close_side = OrderSide.SELL if pos.side == SignalDirection.LONG else OrderSide.BUY
+            close_order = OrderRequest(
+                order_id=f"close_{uuid.uuid4().hex[:8]}",
+                symbol=sym,
+                side=close_side,
+                order_type=OrderType.MARKET,
+                quantity=abs(pos.quantity),
+                price=current_price,
+                client_tag=exit_reason,
+            )
+            self.last_trade_time[sym] = time.time()
+            await self.oms.submit_order(close_order, current_price=current_price)
 
     async def _on_fill_event(self, fill: FillEvent) -> None:
-        """Handle execution fill from OMS."""
+        """Process execution fill from OMS."""
         self.last_fill_summary = (
             f"⚡ {fill.side.value} {fill.filled_quantity:.4f} {fill.symbol} @ ${fill.filled_price:,.2f} "
             f"(Fee: ${fill.fee:.2f} | Slippage: ${fill.slippage:.2f})"
@@ -237,26 +297,26 @@ class PaperTradingApp:
         self.metrics.record_portfolio(self.portfolio, realized_pnl=realized_pnl)
 
     async def _dashboard_loop(self) -> None:
-        """Render live dashboard to terminal every 2 seconds."""
+        """Render clean live status dashboard to terminal every 2 seconds."""
         while self._running:
             await asyncio.sleep(2.0)
             self._render_dashboard()
 
     def _render_dashboard(self) -> None:
-        """Print clean live status table to console."""
+        """Print clean institutional status dashboard."""
         realized_pnl = self.oms.tracker.total_realized_pnl
         positions = self.oms.get_positions()
         unrealized_pnl = sum(p.unrealized_pnl for p in positions.values())
         total_equity = self.portfolio.initial_capital + realized_pnl + unrealized_pnl
 
-        pnl_color = "+" if unrealized_pnl >= 0 else "-"
+        pnl_sign = "+" if unrealized_pnl >= 0 else "-"
 
         print("\n" + "=" * 80)
         print(f"📊 MULTIQUANT PAPER TRADING MONITOR — {datetime.now(timezone.utc).strftime('%H:%M:%S UTC')}")
         print("=" * 80)
         print(
             f"💰 Total Equity : ${total_equity:,.2f} | Cash: ${self.portfolio.cash:,.2f}\n"
-            f"📈 Realized PnL : ${realized_pnl:,.2f} | Unrealized PnL: {pnl_color}${abs(unrealized_pnl):,.2f}\n"
+            f"📈 Realized PnL : ${realized_pnl:+,.2f} | Unrealized PnL: {pnl_sign}${abs(unrealized_pnl):,.2f}\n"
             f"🛡️ Circuit Breaker: {self.risk_manager.guard.current_status.value} (Max Drawdown: {self.portfolio.drawdown_pct * 100:.2f}%)"
         )
         print("-" * 80)
@@ -273,13 +333,14 @@ class PaperTradingApp:
                     f"PnL: ${p.unrealized_pnl:+,.2f}"
                 )
         if open_count == 0:
-            print("   (No open positions currently. Risk Manager is monitoring entry setups...)")
+            print("   (No active positions. Scanning for 1-minute EMA Crossover setups...)")
 
         print("-" * 80)
-        print("📡 LIVE MARKET PRICES & ATR VOLATILITY:")
+        print("📡 LIVE MARKET PRICES & 1-MIN ATR VOLATILITY:")
         for sym, price in self.latest_prices.items():
             atr = self.latest_atrs.get(sym, 0.0)
-            print(f"   • {sym:<8}: ${price:,.2f} (Live ATR: ${atr:.2f})")
+            state = self.last_crossover_state.get(sym, "WARMING_UP")
+            print(f"   • {sym:<8}: ${price:,.2f} | 1m ATR: ${atr:.2f} | Trend: {state}")
 
         print("-" * 80)
         print(f"🔔 LAST EXECUTION RECEIPT:\n   {self.last_fill_summary}")
@@ -292,4 +353,3 @@ if __name__ == "__main__":
         asyncio.run(app.start())
     except KeyboardInterrupt:
         pass
-
