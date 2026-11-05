@@ -8,10 +8,12 @@ and executes realistic simulated fills with dynamic TP/SL and trade cooldowns.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import sys
 import time
+import urllib.request
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -132,6 +134,9 @@ class PaperTradingApp:
         for sym in self.symbols:
             self.metrics.record_market_price(sym, 0.0, 0.0)
 
+        # Preload 600 historical 5m candles (50 hours) so EMA 576 / Donchian 96 are warm immediately
+        self._preload_historical_warmup()
+
         # Send Startup Discord Alert
         await self.notifier.notify_startup(self.portfolio.total_equity, self.symbols)
 
@@ -152,6 +157,37 @@ class PaperTradingApp:
         finally:
             dashboard_task.cancel()
             await self._shutdown()
+
+    def _preload_historical_warmup(self) -> None:
+        """Fetches 600 recent 5m candles from Binance REST API so 48h EMA(576) is warm immediately."""
+        for sym in self.symbols:
+            try:
+                url = f"https://api.binance.com/api/v3/klines?symbol={sym}&interval=5m&limit=600"
+                req = urllib.request.Request(url, headers={"User-Agent": "MultiQuant/1.0"})
+                with urllib.request.urlopen(req, timeout=10) as res:
+                    raw_klines = json.loads(res.read().decode("utf-8"))
+                buf = self.buffers.get(sym)
+                if buf and raw_klines:
+                    for k in raw_klines[:-1]:  # Exclude currently forming candle
+                        bar = BarData(
+                            symbol=sym,
+                            open=float(k[1]),
+                            high=float(k[2]),
+                            low=float(k[3]),
+                            close=float(k[4]),
+                            volume=float(k[5]),
+                            timestamp=datetime.fromtimestamp(int(k[0]) / 1000.0, tz=timezone.utc),
+                            interval="5m",
+                        )
+                        buf.add_bar(bar)
+                    last_close = float(raw_klines[-1][4])
+                    self.latest_prices[sym] = last_close
+                    print(
+                        f"   ✅ Preloaded {buf.count(sym)} historical 5m bars for {sym} "
+                        f"(48h EMA 576 & 8h Donchian 96 Warmed Up | Mark: ${last_close:,.2f})"
+                    )
+            except Exception as e:
+                logger.warning("Could not preload historical 5m warmup for %s: %s", sym, e)
 
     async def _shutdown(self) -> None:
         if self.feed:
