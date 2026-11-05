@@ -44,6 +44,7 @@ from src.core.models import (
 from src.layer1_connectivity.websocket_client import BinanceWebSocketFeed
 from src.layer2_alpha.buffer import RollingBarBuffer
 from src.layer2_alpha.indicators import compute_atr, compute_ema
+from src.layer2_alpha.strategies import MTFVolatilitySqueezeAlpha
 from src.layer3_risk.risk_manager import PreTradeRiskManager
 from src.layer4_oms.oms_engine import OMSEngine
 from src.layer5_state.state_manager import StateManager
@@ -65,7 +66,7 @@ class PaperTradingApp:
         trade_cooldown_sec: float = 60.0,  # Minimum 60s cooldown between trades per symbol
         demo_mode: bool = False,
     ) -> None:
-        self.symbols = [s.upper() for s in (symbols or ["BTCUSDT", "ETHUSDT"])]
+        self.symbols = [s.upper() for s in (symbols or ["BTCUSDT"])]
         self.trade_cooldown_sec = trade_cooldown_sec
         self.initial_capital = (
             initial_capital if initial_capital is not None else settings.INITIAL_CAPITAL
@@ -82,9 +83,10 @@ class PaperTradingApp:
         )
         self.oms = OMSEngine(on_fill=self._on_fill_event)
         self.risk_manager = PreTradeRiskManager()
+        self.alpha_strategy = MTFVolatilitySqueezeAlpha(warmup_period=100)
 
         self.buffers: dict[str, RollingBarBuffer] = {
-            s: RollingBarBuffer(maxlen=100) for s in self.symbols
+            s: RollingBarBuffer(maxlen=600) for s in self.symbols
         }
 
         self.portfolio = PortfolioState(
@@ -114,14 +116,14 @@ class PaperTradingApp:
 
         print("\n" + "=" * 80)
         print("🚀 MULTIQUANT INSTITUTIONAL PAPER TRADING ENGINE STARTED")
-        print(f"   Universe: {self.symbols} | Timeframe: 1-Minute Klines")
+        print(f"   Universe: {self.symbols} | Timeframe: 5-Minute Klines (P6 MTF Squeeze Champion)")
         print(f"   Initial Capital: ${self.portfolio.total_equity:,.2f} USD")
         print(f"   Trade Cooldown: {self.trade_cooldown_sec:.0f}s per asset")
         if settings.DISCORD_WEBHOOK_URL:
             print("   🔔 Discord Alerts: ACTIVE")
         else:
             print("   🔕 Discord Alerts: INACTIVE (Missing DISCORD_WEBHOOK_URL in .env)")
-        print(f"   📈 Live Grafana Dashboard: http://localhost:3000")
+        print("   📈 Live Grafana Dashboard: http://localhost:3000")
         print(f"   📊 Prometheus Endpoint: http://localhost:{settings.PROMETHEUS_METRICS_PORT}/metrics")
         print("=" * 80 + "\n")
 
@@ -133,10 +135,10 @@ class PaperTradingApp:
         # Send Startup Discord Alert
         await self.notifier.notify_startup(self.portfolio.total_equity, self.symbols)
 
-        # Connect to Binance 1-Minute Kline WebSocket stream
+        # Connect to Binance 5-Minute Kline WebSocket stream
         self.feed = BinanceWebSocketFeed(
             symbols=self.symbols,
-            stream_type="kline_1m",
+            stream_type="kline_5m",
             on_bar=self._on_kline_bar,
         )
         await self.feed.connect()
@@ -222,63 +224,35 @@ class PaperTradingApp:
                 return
 
             df_atr = compute_atr(df, period=14)
-            df_calc = compute_ema(df_atr, period=9, column="close", out_col="ema_fast")
-            df_calc = compute_ema(df_calc, period=21, column="close", out_col="ema_slow")
-            df_calc = compute_ema(df_calc, period=50, column="close", out_col="ema_trend")
+            df_calc = compute_ema(df_atr, period=12, column="close", out_col="ema_1h")
+            df_calc = compute_ema(df_calc, period=144, column="close", out_col="ema_12h")
 
-            # Calculate real ATR with minimum sensible floor (0.6% of asset price)
             raw_atr = float(df_calc["atr_14"][-1])
-            min_atr_floor = current_price * 0.006  # e.g. ~$480 on BTC
+            min_atr_floor = current_price * 0.0035
             effective_atr = max(raw_atr, min_atr_floor)
             self.latest_atrs[sym] = effective_atr
 
-            # True Crossover Detection
-            fast_curr = float(df_calc["ema_fast"][-1])
-            slow_curr = float(df_calc["ema_slow"][-1])
-            trend_curr = float(df_calc["ema_trend"][-1])
-            fast_prev = float(df_calc["ema_fast"][-2])
-            slow_prev = float(df_calc["ema_slow"][-2])
-
-            curr_state = "BULLISH" if fast_curr > slow_curr else "BEARISH"
-            prev_state = self.last_crossover_state.get(sym)
+            ema_1h = float(df_calc["ema_1h"][-1])
+            ema_12h = float(df_calc["ema_12h"][-1])
+            curr_state = "BULLISH" if ema_1h > ema_12h else "BEARISH"
             self.last_crossover_state[sym] = curr_state
 
-            # Signal only on a FRESH crossover
-            is_golden_cross = (fast_curr > slow_curr) and (fast_prev <= slow_prev)
-            is_death_cross = (fast_curr < slow_curr) and (fast_prev >= slow_prev)
-
-            # Academic Filter: Trend Regime Filter (EMA 50/200)
-            trend_long_permitted = current_price > trend_curr
-            trend_short_permitted = current_price < trend_curr
-
-            # Academic Filter: Volatility Regime Spike Filter
-            atr_baseline = float(df_calc["atr_14"].mean() or effective_atr)
-            vol_is_normal = effective_atr <= (atr_baseline * 2.0)
-
-            # If this is the initial warmup bar, initialize state without trading
-            if prev_state is None:
-                return
-
-            signal_dir: SignalDirection | None = None
-            if is_golden_cross and trend_long_permitted and vol_is_normal:
-                signal_dir = SignalDirection.LONG
-            elif is_death_cross and trend_short_permitted and vol_is_normal:
-                signal_dir = SignalDirection.SHORT
-
-            if signal_dir is not None:
+            signal = self.alpha_strategy.generate_signal(sym, df)
+            if signal is not None:
                 signal = AlphaSignal(
                     symbol=sym,
-                    direction=signal_dir,
-                    strength=0.90,
-                    strategy_name="Quant_Regime_EMA",
+                    direction=signal.direction,
+                    strength=signal.strength,
+                    strategy_name=signal.strategy_name,
                     metadata={"atr": effective_atr, "close": current_price},
                 )
-                approved_order = self.risk_manager.evaluate_signal(signal, self.portfolio, current_price)
+                approved_order = self.risk_manager.evaluate_signal(
+                    signal, self.portfolio, current_price
+                )
                 if approved_order:
-                    # Calculate and cache planned institutional Stop Loss and Take Profit targets
-                    stop_dist = effective_atr * 2.0
-                    tp_dist = stop_dist * 1.5
-                    if signal_dir == SignalDirection.LONG:
+                    stop_dist = max(effective_atr * 4.5, current_price * 0.015)
+                    tp_dist = stop_dist * 3.0
+                    if signal.direction == SignalDirection.LONG:
                         planned_sl = current_price - stop_dist
                         planned_tp = current_price + tp_dist
                     else:
@@ -287,10 +261,10 @@ class PaperTradingApp:
 
                     self.planned_targets[approved_order.order_id] = {
                         "symbol": sym,
-                        "direction": signal_dir.value,
+                        "direction": signal.direction.value,
                         "stop_loss": planned_sl,
                         "take_profit": planned_tp,
-                        "strategy": "Quant_Regime_EMA",
+                        "strategy": signal.strategy_name,
                     }
 
                     self.last_trade_time[sym] = now
@@ -298,13 +272,13 @@ class PaperTradingApp:
 
     async def _manage_open_position(self, sym: str, pos: Position, current_price: float) -> None:
         """
-        Manages an active position with institutional risk-reward boundaries.
-        Stop Loss: 2.0x ATR (~1.2% distance)
-        Take Profit: 3.0x ATR (~1.8% distance, Risk:Reward 1:1.5)
+        Manages an active position with institutional asymmetric 1:3.0 risk-reward boundaries.
+        Stop Loss: max(4.5x ATR, 1.5% distance)
+        Take Profit: 3.0x Stop Distance (Risk:Reward 1:3.0)
         """
-        atr = self.latest_atrs.get(sym, current_price * 0.006)
-        stop_dist = atr * 2.0
-        tp_dist = stop_dist * 1.5
+        atr = self.latest_atrs.get(sym, current_price * 0.0035)
+        stop_dist = max(atr * 4.5, pos.entry_price * 0.015)
+        tp_dist = stop_dist * 3.0
 
         should_close = False
         exit_reason = ""

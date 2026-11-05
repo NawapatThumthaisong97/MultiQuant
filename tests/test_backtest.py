@@ -1,6 +1,7 @@
 import polars as pl
 
 from src.layer2_alpha.backtest import BacktestEngine
+from src.layer2_alpha.strategies import MTFVolatilitySqueezeAlpha
 
 
 def test_backtest_engine_execution_and_metrics():
@@ -70,8 +71,12 @@ def test_backtest_5m_presets():
         "P3_VOLATILITY_SQUEEZE",
         "P4_SQUEEZE_ADX_REGIME",
         "P5_INSTITUTIONAL_ELITE",
+        "P6_MTF_SQUEEZE_CHAMPION",
     ]:
         assert col in df_prep.columns
         m = engine.run_5m_preset(df_prep, preset_col=col, strategy_name=col)
         assert m.initial_capital == 50.0
         assert m.max_drawdown_pct >= 0.0
+
+    strat = MTFVolatilitySqueezeAlpha(warmup_period=50)
+    _ = strat.generate_signal("BTCUSDT", df)

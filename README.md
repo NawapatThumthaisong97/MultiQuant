@@ -131,18 +131,19 @@ MultiQuant features a high-performance Polars & NumPy event-driven backtesting e
 
 ### 1. Full-Year 2026 5-Minute BTCUSDT Benchmark (89,050 Candles | $50 Initial Capital)
 
-Tested across the entire year (`2025-12-31` to `2026-11-05`, where **BTC Buy & Hold returned `-13.31%`** with a **`-40.97%` Max Drawdown** from `$97,924` to `$57,800`), comparing **5 Orthogonal Strategy Presets**:
+Tested across the entire year (`2025-12-31` to `2026-11-05`, where **BTC Buy & Hold returned `-13.31%`** with a **`-40.97%` Max Drawdown** from `$97,924` to `$57,800`), comparing **6 Orthogonal Strategy Presets**:
 
 | Preset Combo | Core Orthogonal Indicators | Trades | Win Rate | Profit Factor | Net Return | Sharpe | Max DD | Fees+Slip | Final Equity |
 | :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
 | **P1: Retail EMA 9/21** | Raw `EMA(9/21)` Crossover | 1,002 | 34.4% | 0.66 | -61.89% | -8.74 | 62.00% | $23.41 | $19.05 |
 | **P2: Minimalist 3-Pillar** | `EMA(576)` + `Donchian(96)` + `RVOL/Taker` | 132 | 23.5% | 0.90 | -9.50% | -0.70 | 22.46% | $4.99 | $45.25 |
-| **P3: Volatility Squeeze (★ OPTIMAL)** | **`BB Squeeze` + `Donchian(96)` + `EMA(576)` + `Orderflow`** | **114** | **35.1%** | **1.48** | **+30.15%** | **2.22** | **7.59%** | **$4.90** | **$65.07** |
+| **P3: Volatility Squeeze** | `BB Squeeze` + `Donchian(96)` + `EMA(576)` + `Orderflow` | 114 | 35.1% | 1.48 | +30.15% | 2.22 | 7.59% | $4.90 | $65.07 |
 | **P4: Squeeze + ADX Regime** | P3 + `ADX(14) >= 20` Trend Filter | 110 | 33.6% | 1.38 | +23.47% | 1.80 | 9.13% | $4.73 | $61.74 |
-| **P5: Institutional Elite** | P4 + `1h Stationary CVD` + `DI+/DI-` | **108** | 34.3% | 1.42 | **+25.45%** | 1.93 | 9.13% | **$4.70** | **$62.73** |
+| **P5: Institutional Elite** | P4 + `1h Stationary CVD` + `DI+/DI-` | 108 | 34.3% | 1.42 | +25.45% | 1.93 | 9.13% | $4.70 | $62.73 |
+| **P6: MTF Squeeze Champion (★ BEST)** | **P3 + `1h/12h EMA Alignment` (`EMA 12 > EMA 144`)** | **113** | **35.4%** | **1.50** | **+31.11%** | **2.28** | **7.59%** | **$4.89** | **$65.56** |
 
-> 💡 **Key Quantitative Finding ("Less is More" / Orthogonality)**:
-> On 5-minute BTC bars, stacking collinear oscillators causes severe lag, while raw crossovers suffer fatal fee bleed (`$23.41` in fees across 1,002 trades). Combining **4 strictly orthogonal dimensions** in **Preset 3 (`P3_VOLATILITY_SQUEEZE`)** — *Macro 48h Trend (`EMA 576`) + Volatility Compression (`BB Squeeze`) + 8h Structural Breakout (`Donchian 96`) + Aggressive Taker Orderflow (`RVOL >= 2.0`, `Taker Buy >= 58%`)* with asymmetric $1:3.0$ Risk:Reward — generates **+30.15% Net Return (+43.46% Alpha over BTC)** while capping Max Drawdown at **7.59%**.
+> 💡 **Key Quantitative Finding ("Less is More" / Fractal Orthogonality)**:
+> On 5-minute BTC bars, stacking collinear oscillators causes severe lag, while raw crossovers suffer fatal fee bleed (`$23.41` in fees across 1,002 trades). Combining **4 strictly orthogonal dimensions** in **Preset 6 (`P6_MTF_SQUEEZE_CHAMPION` / `MTFVolatilitySqueezeAlpha`)** — *Fractal Multi-Timeframe Trend (`1h EMA 12 > 12h EMA 144` & `Close > 48h EMA 576`) + Volatility Compression (`BB Squeeze`) + 8h Structural Breakout (`Donchian 96`) + Aggressive Taker Orderflow (`RVOL >= 2.0`, `Taker Buy >= 58%`)* with asymmetric $1:3.0$ Risk:Reward — generates **+31.11% Net Return (+44.42% Alpha over BTC)** with a **2.28 Sharpe Ratio** and **7.59% Max Drawdown**.
 
 ```bash
 # Run the Full-Year 5-Minute 5-Preset Benchmark (89,050+ candles)

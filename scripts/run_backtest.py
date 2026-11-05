@@ -241,9 +241,10 @@ def main() -> None:
         presets = [
             ("P1_RETAIL_EMA_5M", "P1: Retail EMA 9/21 (Baseline)", 0.006, 2.0, 1.5, 1),
             ("P2_MINIMALIST_3PILLAR", "P2: Minimalist 3-Pillar Structure", 0.015, 4.5, 3.0, 72),
-            ("P3_VOLATILITY_SQUEEZE", "P3: Volatility Squeeze (★ OPTIMAL)", 0.015, 4.5, 3.0, 72),
+            ("P3_VOLATILITY_SQUEEZE", "P3: Volatility Squeeze Breakout", 0.015, 4.5, 3.0, 72),
             ("P4_SQUEEZE_ADX_REGIME", "P4: Squeeze + ADX Trend Regime", 0.015, 4.5, 3.0, 72),
             ("P5_INSTITUTIONAL_ELITE", "P5: Institutional Orderflow + 1h CVD", 0.015, 4.5, 3.0, 72),
+            ("P6_MTF_SQUEEZE_CHAMPION", "P6: MTF Squeeze + 1h/12h (★ BEST)", 0.015, 4.5, 3.0, 72),
         ]
 
         results: list[BacktestMetrics] = []

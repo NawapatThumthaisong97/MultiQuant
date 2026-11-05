@@ -370,13 +370,15 @@ class BacktestEngine:
 
     def prepare_5m_preset_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         """
-        Computes vectorized orthogonal indicators and signal columns for all 5 Presets
+        Computes vectorized orthogonal indicators and signal columns for all 6 Presets
         specifically calibrated for 5-minute BTCUSDT bars.
         """
         res = compute_atr(df, 14)
         res = compute_ema(res, 9)
+        res = compute_ema(res, 12, out_col="ema_1h")
         res = compute_ema(res, 21)
         res = compute_ema(res, 50)
+        res = compute_ema(res, 144, out_col="ema_12h")
         res = compute_ema(res, 200)
         res = compute_ema(res, 576)  # 48-hour Macro Institutional Trend
         res = compute_bollinger_bands(res, 20, 2.0)
@@ -425,7 +427,7 @@ class BacktestEngine:
             & vol_ok
         )
 
-        # Preset 3: Volatility Squeeze Breakout ("Less is More" Optimal 5m Combo)
+        # Preset 3: Volatility Squeeze Breakout
         p3_l = squeeze_ok & p2_l & (pl.col("close") > pl.col("bb_upper"))
         p3_s = squeeze_ok & p2_s & (pl.col("close") < pl.col("bb_lower"))
 
@@ -436,6 +438,10 @@ class BacktestEngine:
         # Preset 5: Institutional Orderflow & Stationary 1h CVD Elite
         p5_l = p4_l & (pl.col("cvd_1h") > 0) & (pl.col("plus_di_14") > pl.col("minus_di_14"))
         p5_s = p4_s & (pl.col("cvd_1h") < 0) & (pl.col("minus_di_14") > pl.col("plus_di_14"))
+
+        # Preset 6: MTF Volatility Squeeze Champion (P3 + 1h/12h Fractal EMA Alignment)
+        p6_l = p3_l & (pl.col("ema_1h") > pl.col("ema_12h"))
+        p6_s = p3_s & (pl.col("ema_1h") < pl.col("ema_12h"))
 
         return res.with_columns(
             [
@@ -464,6 +470,12 @@ class BacktestEngine:
                 .then(-1)
                 .otherwise(0)
                 .alias("P5_INSTITUTIONAL_ELITE"),
+                pl.when(p6_l)
+                .then(1)
+                .when(p6_s)
+                .then(-1)
+                .otherwise(0)
+                .alias("P6_MTF_SQUEEZE_CHAMPION"),
             ]
         )
 

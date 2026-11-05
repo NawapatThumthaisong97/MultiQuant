@@ -11,7 +11,13 @@ import polars as pl
 
 from src.core.models import AlphaSignal, SignalDirection
 from src.layer2_alpha.base import BaseAlphaStrategy
-from src.layer2_alpha.indicators import compute_atr, compute_bollinger_bands, compute_ema
+from src.layer2_alpha.indicators import (
+    compute_atr,
+    compute_bollinger_bands,
+    compute_donchian_channels,
+    compute_ema,
+    compute_microstructure_flow,
+)
 
 
 class TrendVolatilityAlpha(BaseAlphaStrategy):
@@ -185,6 +191,141 @@ class BollingerMeanReversionAlpha(BaseAlphaStrategy):
                     "atr": float(atr_curr),
                     "close": float(close_curr),
                     "bb_upper": float(upper_curr),
+                },
+            )
+
+        return None
+
+
+class MTFVolatilitySqueezeAlpha(BaseAlphaStrategy):
+    """
+    Flagship 5-Minute BTCUSDT Champion Strategy (P3 + 1h/12h Trend Alignment):
+    - Multi-Timeframe EMA Cascade: 1h EMA(12) vs 12h EMA(144) & Close vs 48h EMA(576)
+    - Volatility Compression: Bollinger Bandwidth Squeeze (< 0.85x 8h mean) + Band Breakout
+    - Structural Range Breakout: 8-hour Donchian Channel (96 bars)
+    - Orderflow Microstructure: RVOL >= 2.0x + Taker Buy Ratio >= 58% + ATR Spike Guard
+    """
+
+    def __init__(
+        self,
+        name: str = "mtf_volatility_squeeze",
+        donchian_period: int = 96,
+        macro_ema_period: int = 576,
+        rvol_threshold: float = 2.0,
+        taker_ratio_threshold: float = 0.58,
+        warmup_period: int = 100,
+    ) -> None:
+        super().__init__(name=name, warmup_period=warmup_period)
+        self.donchian_period = donchian_period
+        self.macro_ema_period = macro_ema_period
+        self.rvol_threshold = rvol_threshold
+        self.taker_ratio_threshold = taker_ratio_threshold
+        self.parameters = {
+            "donchian_period": donchian_period,
+            "macro_ema_period": macro_ema_period,
+            "rvol_threshold": rvol_threshold,
+            "taker_ratio_threshold": taker_ratio_threshold,
+        }
+
+    def generate_signal(self, symbol: str, df: pl.DataFrame) -> AlphaSignal | None:
+        if not self.is_warmed_up(df):
+            return None
+
+        df_calc = compute_atr(df, period=14)
+        df_calc = compute_ema(df_calc, period=12, out_col="ema_1h")
+        df_calc = compute_ema(df_calc, period=144, out_col="ema_12h")
+        df_calc = compute_ema(df_calc, period=self.macro_ema_period, out_col="ema_macro")
+        df_calc = compute_bollinger_bands(df_calc, period=20, num_std=2.0)
+        df_calc = compute_donchian_channels(df_calc, period=self.donchian_period)
+        df_calc = compute_microstructure_flow(df_calc, rvol_period=24)
+
+        df_calc = df_calc.with_columns(
+            [
+                pl.col("atr_14").rolling_mean(window_size=96, min_samples=1).alias("atr_base"),
+                pl.col("bb_bandwidth")
+                .rolling_mean(window_size=96, min_samples=1)
+                .alias("bb_bw_mean"),
+                pl.col("bb_bandwidth")
+                .rolling_min(window_size=12, min_samples=1)
+                .alias("bb_bw_min12"),
+            ]
+        )
+
+        latest = df_calc.tail(1)
+        close_curr = float(latest["close"][0])
+        atr_curr = float(latest["atr_14"][0])
+        atr_base = float(latest["atr_base"][0])
+        ema_1h = float(latest["ema_1h"][0])
+        ema_12h = float(latest["ema_12h"][0])
+        ema_macro = float(latest["ema_macro"][0])
+        bb_upper = float(latest["bb_upper"][0])
+        bb_lower = float(latest["bb_lower"][0])
+        bb_bw_min12 = float(latest["bb_bw_min12"][0])
+        bb_bw_mean = float(latest["bb_bw_mean"][0])
+        d_high = float(latest[f"donchian_high_{self.donchian_period}"][0])
+        d_low = float(latest[f"donchian_low_{self.donchian_period}"][0])
+        rvol = float(latest["rvol"][0])
+        taker_ratio = float(latest["taker_buy_ratio"][0])
+
+        vol_ok = atr_curr <= (atr_base * 2.2)
+        squeeze_ok = bb_bw_min12 < (bb_bw_mean * 0.85)
+        has_taker_col = "taker_buy_volume" in df.columns
+
+        long_flow_ok = (rvol >= self.rvol_threshold) and (
+            taker_ratio >= self.taker_ratio_threshold if has_taker_col else True
+        )
+        short_flow_ok = (rvol >= self.rvol_threshold) and (
+            taker_ratio <= (1.0 - self.taker_ratio_threshold) if has_taker_col else True
+        )
+
+        if (
+            squeeze_ok
+            and vol_ok
+            and close_curr > bb_upper
+            and close_curr > d_high
+            and close_curr > ema_macro
+            and ema_1h > ema_12h
+            and long_flow_ok
+        ):
+            return AlphaSignal(
+                symbol=symbol,
+                direction=SignalDirection.LONG,
+                strength=0.95,
+                timestamp=datetime.now(UTC),
+                strategy_name=self.name,
+                metadata={
+                    "atr": atr_curr,
+                    "close": close_curr,
+                    "ema_1h": ema_1h,
+                    "ema_12h": ema_12h,
+                    "ema_macro": ema_macro,
+                    "rvol": rvol,
+                    "taker_buy_ratio": taker_ratio,
+                },
+            )
+        elif (
+            squeeze_ok
+            and vol_ok
+            and close_curr < bb_lower
+            and close_curr < d_low
+            and close_curr < ema_macro
+            and ema_1h < ema_12h
+            and short_flow_ok
+        ):
+            return AlphaSignal(
+                symbol=symbol,
+                direction=SignalDirection.SHORT,
+                strength=0.95,
+                timestamp=datetime.now(UTC),
+                strategy_name=self.name,
+                metadata={
+                    "atr": atr_curr,
+                    "close": close_curr,
+                    "ema_1h": ema_1h,
+                    "ema_12h": ema_12h,
+                    "ema_macro": ema_macro,
+                    "rvol": rvol,
+                    "taker_buy_ratio": taker_ratio,
                 },
             )
 
