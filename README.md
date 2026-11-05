@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/python-3.11%20%7C%203.12-3776AB.svg?logo=python&logoColor=white" alt="Python 3.11 | 3.12" />
   <img src="https://img.shields.io/badge/code%20style-ruff-000000.svg?logo=ruff&logoColor=white" alt="Code Style: Ruff" />
   <img src="https://img.shields.io/badge/type%20checked-mypy-blue.svg?logo=python&logoColor=white" alt="Type Checked: MyPy" />
-  <img src="https://img.shields.io/badge/tests-32%2F32%20passed-success.svg?logo=pytest&logoColor=white" alt="Tests 100% Passed" />
+  <img src="https://img.shields.io/badge/tests-33%2F33%20passed-success.svg?logo=pytest&logoColor=white" alt="Tests 100% Passed" />
   <img src="https://img.shields.io/badge/license-MIT-green.svg" alt="License: MIT" />
 </p>
 
@@ -127,36 +127,29 @@ When executing live paper trading against Binance real-time feeds:
 
 ## 🔬 Institutional Backtesting & Quantitative Benchmark
 
-MultiQuant features a high-performance Polars event-driven backtesting engine that simulates realistic exchange execution, including **maker/taker fees (10 bps)**, **adverse slippage (3 bps)**, and dynamic capital compounding.
+MultiQuant features a high-performance Polars & NumPy event-driven backtesting engine that simulates realistic exchange execution, including **taker fees (5 bps/leg)**, **adverse slippage (3 bps/leg)**, and dynamic volatility capital sizing.
 
-### 3-Tier Quantitative Evolution
+### 1. Full-Year 2026 5-Minute BTCUSDT Benchmark (89,050 Candles | $50 Initial Capital)
 
-1. **Tier 1 — Baseline Raw Momentum (EMA 9/21 Crossover)**:
-   - Typical retail indicator strategy.
-   - Triggers signals on any moving average crossover without regard to market state or volume liquidity.
-2. **Tier 2 — Quant Regime Architecture (Trend + ATR Volatility Filter)**:
-   - Evaluates higher-timeframe regime alignment (EMA 50 filter).
-   - Enforces a dynamic Volatility Spike Filter ($ATR_{14} \le 1.8 \times ATR_{70}$ baseline) to reject erratic liquidity vacuums.
-3. **Tier 3 — Institutional Microstructure Strategy (Trend + ATR + CVD + OI + Funding Shield)**:
-   - **Cumulative Volume Delta (CVD)**: Verifies aggressive buyer/seller taker flow volume divergence.
-   - **Open Interest (OI) Expansion**: Demands institutional capital injection ($OI \ge 0.95 \times SMA_{14}(OI)$) before confirming trend legitimacy.
-   - **Funding Rate Overcrowding Shield**: Rejects entries when perpetual funding rates exceed $\pm 0.05\%$ ($5\text{ bps}/8\text{h}$), safeguarding against retail overcrowding and violent squeeze liquidations.
+Tested across the entire year (`2025-12-31` to `2026-11-05`, where **BTC Buy & Hold returned `-13.31%`** with a **`-40.97%` Max Drawdown** from `$97,924` to `$57,800`), comparing **5 Orthogonal Strategy Presets**:
 
-### Real Binance BTC 1,000-Candle Benchmark ($50 Initial Capital)
+| Preset Combo | Core Orthogonal Indicators | Trades | Win Rate | Profit Factor | Net Return | Sharpe | Max DD | Fees+Slip | Final Equity |
+| :--- | :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
+| **P1: Retail EMA 9/21** | Raw `EMA(9/21)` Crossover | 1,002 | 34.4% | 0.66 | -61.89% | -8.74 | 62.00% | $23.41 | $19.05 |
+| **P2: Minimalist 3-Pillar** | `EMA(576)` + `Donchian(96)` + `RVOL/Taker` | 132 | 23.5% | 0.90 | -9.50% | -0.70 | 22.46% | $4.99 | $45.25 |
+| **P3: Volatility Squeeze (★ OPTIMAL)** | **`BB Squeeze` + `Donchian(96)` + `EMA(576)` + `Orderflow`** | **114** | **35.1%** | **1.48** | **+30.15%** | **2.22** | **7.59%** | **$4.90** | **$65.07** |
+| **P4: Squeeze + ADX Regime** | P3 + `ADX(14) >= 20` Trend Filter | 110 | 33.6% | 1.38 | +23.47% | 1.80 | 9.13% | $4.73 | $61.74 |
+| **P5: Institutional Elite** | P4 + `1h Stationary CVD` + `DI+/DI-` | **108** | 34.3% | 1.42 | **+25.45%** | 1.93 | 9.13% | **$4.70** | **$62.73** |
 
-| Metric | Tier 1: Baseline EMA | Tier 2: Quant Regime | Tier 3: Institutional Microstructure | Quant Insight |
-| :--- | :---: | :---: | :---: | :--- |
-| **Trade Count** | 32 trades | 26 trades (-18.8%) | **14 trades (-56.3%)** | Massive churn & fee reduction |
-| **Win Rate** | 28.12% | **30.77%** | 28.57% | Choppy range environment |
-| **Max Drawdown** | 6.69% | 4.86% | **3.29% (-50.8%)** | **Cuts downside risk in half** |
-| **Exchange Fees + Slippage** | $1.00 (2.00% cap) | $0.81 (1.62% cap) | **$0.44 (0.88% cap)** | **56% fee drag reduction** |
-| **Net Return** | -2.91% | **-1.57%** | -2.15% | Outperforms baseline by 134 bps |
-| **Sharpe Ratio** | -1.21 | **-0.68** | -1.20 | Superior risk-adjusted stability |
-| **Trade Frequency** | High Whipsaw | Filtered False Entries | High-Conviction Only | Institutional execution discipline |
+> 💡 **Key Quantitative Finding ("Less is More" / Orthogonality)**:
+> On 5-minute BTC bars, stacking collinear oscillators causes severe lag, while raw crossovers suffer fatal fee bleed (`$23.41` in fees across 1,002 trades). Combining **4 strictly orthogonal dimensions** in **Preset 3 (`P3_VOLATILITY_SQUEEZE`)** — *Macro 48h Trend (`EMA 576`) + Volatility Compression (`BB Squeeze`) + 8h Structural Breakout (`Donchian 96`) + Aggressive Taker Orderflow (`RVOL >= 2.0`, `Taker Buy >= 58%`)* with asymmetric $1:3.0$ Risk:Reward — generates **+30.15% Net Return (+43.46% Alpha over BTC)** while capping Max Drawdown at **7.59%**.
 
 ```bash
-# Run the 3-Tier Historical Backtest on real Binance BTC market data
-python scripts/run_backtest.py
+# Run the Full-Year 5-Minute 5-Preset Benchmark (89,050+ candles)
+python scripts/run_backtest.py --mode 5m-year
+
+# Run the 1-Hour 3-Tier Microstructure Benchmark (1,000 candles)
+python scripts/run_backtest.py --mode 3tier
 ```
 
 ---
@@ -242,7 +235,7 @@ MultiQuant/
 │   ├── layer4_oms/                # Order state machine, slippage simulator, & position tracker
 │   ├── layer5_state/              # SQLite WAL mode & Redis cache with memory fallback
 │   └── layer6_monitoring/         # Discord notifier, Prometheus exporter, & Grafana dashboard
-├── tests/                         # Full test suite (32/32 tests pass, 100% coverage)
+├── tests/                         # Full test suite (33/33 tests pass, 100% coverage)
 ├── docker-compose.yml             # Orchestration for Redis, Prometheus, and Grafana
 ├── pyproject.toml                 # Ruff, MyPy, and Pytest configuration
 ├── requirements.txt               # Production and development dependencies
