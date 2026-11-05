@@ -22,6 +22,16 @@ from typing import Any
 import numpy as np
 import polars as pl
 
+from src.layer2_alpha.indicators import (
+    compute_adx,
+    compute_atr,
+    compute_bollinger_bands,
+    compute_donchian_channels,
+    compute_ema,
+    compute_microstructure_flow,
+    compute_rsi,
+)
+
 logger = logging.getLogger("multiquant.backtest")
 
 
@@ -358,6 +368,236 @@ class BacktestEngine:
 
         return res
 
+    def prepare_5m_preset_signals(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Computes vectorized orthogonal indicators and signal columns for all 5 Presets
+        specifically calibrated for 5-minute BTCUSDT bars.
+        """
+        res = compute_atr(df, 14)
+        res = compute_ema(res, 9)
+        res = compute_ema(res, 21)
+        res = compute_ema(res, 50)
+        res = compute_ema(res, 200)
+        res = compute_ema(res, 576)  # 48-hour Macro Institutional Trend
+        res = compute_bollinger_bands(res, 20, 2.0)
+        res = compute_rsi(res, 14)
+        res = compute_adx(res, 14)
+        res = compute_donchian_channels(res, 96)  # 8-hour Structural Range
+        res = compute_microstructure_flow(res, 24)
+
+        res = res.with_columns(
+            [
+                pl.col("atr_14").rolling_mean(window_size=96, min_samples=1).alias("atr_base"),
+                pl.col("bb_bandwidth")
+                .rolling_mean(window_size=96, min_samples=1)
+                .alias("bb_bw_mean"),
+                pl.col("bb_bandwidth")
+                .rolling_min(window_size=12, min_samples=1)
+                .alias("bb_bw_min12"),
+                pl.col("volume_delta").rolling_sum(window_size=12, min_samples=1).alias("cvd_1h"),
+            ]
+        )
+
+        vol_ok = pl.col("atr_14") <= (pl.col("atr_base") * 2.2)
+        squeeze_ok = pl.col("bb_bw_min12") < (pl.col("bb_bw_mean") * 0.85)
+
+        # Preset 1: Baseline Retail 5m EMA 9/21 Crossover (Unfiltered)
+        p1_l = (pl.col("ema_9") > pl.col("ema_21")) & (
+            pl.col("ema_9").shift(1) <= pl.col("ema_21").shift(1)
+        )
+        p1_s = (pl.col("ema_9") < pl.col("ema_21")) & (
+            pl.col("ema_9").shift(1) >= pl.col("ema_21").shift(1)
+        )
+
+        # Preset 2: Minimalist 3-Pillar Structure (EMA 576 Macro + Donchian 96 + Orderflow)
+        p2_l = (
+            (pl.col("close") > pl.col("donchian_high_96"))
+            & (pl.col("close") > pl.col("ema_576"))
+            & (pl.col("rvol") >= 2.0)
+            & (pl.col("taker_buy_ratio") >= 0.58)
+            & vol_ok
+        )
+        p2_s = (
+            (pl.col("close") < pl.col("donchian_low_96"))
+            & (pl.col("close") < pl.col("ema_576"))
+            & (pl.col("rvol") >= 2.0)
+            & (pl.col("taker_buy_ratio") <= 0.42)
+            & vol_ok
+        )
+
+        # Preset 3: Volatility Squeeze Breakout ("Less is More" Optimal 5m Combo)
+        p3_l = squeeze_ok & p2_l & (pl.col("close") > pl.col("bb_upper"))
+        p3_s = squeeze_ok & p2_s & (pl.col("close") < pl.col("bb_lower"))
+
+        # Preset 4: Squeeze + ADX Trend Strength Regime (ADX >= 20)
+        p4_l = p3_l & (pl.col("adx_14") >= 20.0)
+        p4_s = p3_s & (pl.col("adx_14") >= 20.0)
+
+        # Preset 5: Institutional Orderflow & Stationary 1h CVD Elite
+        p5_l = p4_l & (pl.col("cvd_1h") > 0) & (pl.col("plus_di_14") > pl.col("minus_di_14"))
+        p5_s = p4_s & (pl.col("cvd_1h") < 0) & (pl.col("minus_di_14") > pl.col("plus_di_14"))
+
+        return res.with_columns(
+            [
+                pl.when(p1_l).then(1).when(p1_s).then(-1).otherwise(0).alias("P1_RETAIL_EMA_5M"),
+                pl.when(p2_l)
+                .then(1)
+                .when(p2_s)
+                .then(-1)
+                .otherwise(0)
+                .alias("P2_MINIMALIST_3PILLAR"),
+                pl.when(p3_l)
+                .then(1)
+                .when(p3_s)
+                .then(-1)
+                .otherwise(0)
+                .alias("P3_VOLATILITY_SQUEEZE"),
+                pl.when(p4_l)
+                .then(1)
+                .when(p4_s)
+                .then(-1)
+                .otherwise(0)
+                .alias("P4_SQUEEZE_ADX_REGIME"),
+                pl.when(p5_l)
+                .then(1)
+                .when(p5_s)
+                .then(-1)
+                .otherwise(0)
+                .alias("P5_INSTITUTIONAL_ELITE"),
+            ]
+        )
+
+    def run_5m_preset(
+        self,
+        df_prepared: pl.DataFrame,
+        preset_col: str,
+        strategy_name: str,
+        min_stop_pct: float = 0.015,
+        atr_mult: float = 4.5,
+        rr_ratio: float = 3.0,
+        cooldown_bars: int = 72,
+    ) -> BacktestMetrics:
+        """
+        Fast NumPy-accelerated event-driven execution loop for 5-minute presets over 89,000+ bars.
+        """
+        closes = df_prepared["close"].to_numpy()
+        highs = df_prepared["high"].to_numpy()
+        lows = df_prepared["low"].to_numpy()
+        atrs = df_prepared["atr_14"].to_numpy()
+        sigs = df_prepared[preset_col].to_numpy()
+        timestamps = df_prepared["timestamp"].to_list()
+
+        capital = self.initial_capital
+        cash = capital
+        pos_side = 0
+        pos_qty = 0.0
+        entry_p = 0.0
+        sl_p = 0.0
+        tp_p = 0.0
+        last_exit_i = -999999
+
+        trades: list[dict[str, Any]] = []
+        total_fees = 0.0
+        total_slippage = 0.0
+        n_bars = len(closes)
+        equity_curve: list[float] = [capital]
+
+        for i in range(1, n_bars):
+            close_p = float(closes[i])
+            high_p = float(highs[i])
+            low_p = float(lows[i])
+
+            if pos_side == 1:
+                if low_p <= sl_p or high_p >= tp_p:
+                    ex = sl_p if low_p <= sl_p else tp_p
+                    act_ex = ex * (1.0 - self.slippage_fraction)
+                    fee = act_ex * pos_qty * self.taker_fee_pct
+                    pnl = (act_ex - entry_p) * pos_qty - fee
+                    cash += (pos_qty * act_ex) - fee
+                    total_fees += fee
+                    total_slippage += abs(ex - act_ex) * pos_qty
+                    trades.append(
+                        {
+                            "exit_time": timestamps[i],
+                            "side": "LONG",
+                            "pnl": pnl,
+                            "reason": "SL" if low_p <= sl_p else "TP",
+                            "is_win": pnl > 0,
+                        }
+                    )
+                    pos_side = 0
+                    pos_qty = 0.0
+                    last_exit_i = i
+            elif pos_side == -1:
+                if high_p >= sl_p or low_p <= tp_p:
+                    ex = sl_p if high_p >= sl_p else tp_p
+                    act_ex = ex * (1.0 + self.slippage_fraction)
+                    fee = act_ex * pos_qty * self.taker_fee_pct
+                    pnl = (entry_p - act_ex) * pos_qty - fee
+                    cash += pnl
+                    total_fees += fee
+                    total_slippage += abs(act_ex - ex) * pos_qty
+                    trades.append(
+                        {
+                            "exit_time": timestamps[i],
+                            "side": "SHORT",
+                            "pnl": pnl,
+                            "reason": "SL" if high_p >= sl_p else "TP",
+                            "is_win": pnl > 0,
+                        }
+                    )
+                    pos_side = 0
+                    pos_qty = 0.0
+                    last_exit_i = i
+
+            unr = (
+                (close_p - entry_p) * pos_qty
+                if pos_side == 1
+                else ((entry_p - close_p) * pos_qty if pos_side == -1 else 0.0)
+            )
+            curr_eq = (cash + pos_qty * close_p) if pos_side == 1 else (cash + unr)
+            equity_curve.append(curr_eq)
+
+            if pos_side == 0 and (i - last_exit_i) >= cooldown_bars and sigs[i] != 0:
+                s = int(sigs[i])
+                stop_dist = max(float(atrs[i]) * atr_mult, close_p * min_stop_pct)
+                tp_dist = stop_dist * rr_ratio
+                risk_usd = curr_eq * self.risk_per_trade_pct
+                qty = min(risk_usd / stop_dist, (curr_eq * 0.45) / close_p)
+
+                if qty * close_p >= 5.0 and cash >= (qty * close_p * 0.4):
+                    act_en = (
+                        close_p * (1.0 + self.slippage_fraction)
+                        if s == 1
+                        else close_p * (1.0 - self.slippage_fraction)
+                    )
+                    fee = act_en * qty * self.taker_fee_pct
+                    total_fees += fee
+                    total_slippage += abs(act_en - close_p) * qty
+                    pos_side = s
+                    pos_qty = qty
+                    entry_p = act_en
+                    if s == 1:
+                        sl_p = act_en - stop_dist
+                        tp_p = act_en + tp_dist
+                        cash -= (qty * act_en) + fee
+                    else:
+                        sl_p = act_en + stop_dist
+                        tp_p = act_en - tp_dist
+                        cash -= fee
+
+        final_equity = equity_curve[-1] if equity_curve else capital
+        return self._calculate_metrics(
+            strategy_name,
+            capital,
+            final_equity,
+            equity_curve,
+            trades,
+            total_fees,
+            total_slippage,
+            bars_per_year=365.0 * 288.0,
+        )
+
     def _calculate_metrics(
         self,
         strategy_name: str,
@@ -367,6 +607,7 @@ class BacktestEngine:
         trades: list[dict[str, Any]],
         total_fees: float,
         total_slippage: float,
+        bars_per_year: float = 365.0 * 24.0,
     ) -> BacktestMetrics:
         """Calculates risk-adjusted returns and institutional metrics."""
         total_return_pct = ((final_equity - capital) / capital) * 100.0
@@ -378,12 +619,12 @@ class BacktestEngine:
 
         returns = np.diff(eq) / eq[:-1] if len(eq) > 1 else np.array([0.0])
         std = np.std(returns) if len(returns) > 1 else 0.0
-        sharpe = float((np.mean(returns) / std) * np.sqrt(365 * 24)) if std > 1e-9 else 0.0
+        sharpe = float((np.mean(returns) / std) * np.sqrt(bars_per_year)) if std > 1e-9 else 0.0
 
         downside_returns = returns[returns < 0]
         downside_std = np.std(downside_returns) if len(downside_returns) > 1 else 0.0
         sortino = (
-            float((np.mean(returns) / downside_std) * np.sqrt(365 * 24))
+            float((np.mean(returns) / downside_std) * np.sqrt(bars_per_year))
             if downside_std > 1e-9
             else 0.0
         )
@@ -402,7 +643,7 @@ class BacktestEngine:
         )
 
         n_bars = max(1, len(equity_curve))
-        years = n_bars / (365.0 * 24.0)
+        years = n_bars / bars_per_year
         annualized = (
             ((final_equity / capital) ** (1.0 / max(0.01, years)) - 1.0) * 100.0
             if years > 0 and final_equity > 0

@@ -42,3 +42,36 @@ def test_backtest_engine_execution_and_metrics():
     assert isinstance(metrics.sharpe_ratio, float)
     assert isinstance(metrics.max_drawdown_pct, float)
     assert metrics.max_drawdown_pct >= 0.0
+
+
+def test_backtest_5m_presets():
+    bars = []
+    price = 60000.0
+    for i in range(200):
+        price += 35.0 if i % 4 != 0 else -45.0
+        bars.append(
+            {
+                "timestamp": f"2026-01-01 {i // 12:02d}:{(i % 12) * 5:02d}:00",
+                "open": price - 15.0,
+                "high": price + 50.0,
+                "low": price - 40.0,
+                "close": price,
+                "volume": 120.0 + (i % 10) * 30.0,
+                "taker_buy_volume": 75.0 + (i % 10) * 20.0,
+            }
+        )
+    df = pl.DataFrame(bars)
+    engine = BacktestEngine(initial_capital=50.0)
+    df_prep = engine.prepare_5m_preset_signals(df)
+
+    for col in [
+        "P1_RETAIL_EMA_5M",
+        "P2_MINIMALIST_3PILLAR",
+        "P3_VOLATILITY_SQUEEZE",
+        "P4_SQUEEZE_ADX_REGIME",
+        "P5_INSTITUTIONAL_ELITE",
+    ]:
+        assert col in df_prep.columns
+        m = engine.run_5m_preset(df_prep, preset_col=col, strategy_name=col)
+        assert m.initial_capital == 50.0
+        assert m.max_drawdown_pct >= 0.0
