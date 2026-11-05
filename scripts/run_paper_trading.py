@@ -216,24 +216,26 @@ class PaperTradingApp:
             return
 
         # 4. Once buffer has enough real bars, compute indicators and evaluate Alpha
-        if buf.count(sym) >= 20:
+        if buf.count(sym) >= 30:
             df = buf.to_polars(sym)
             if df is None:
                 return
 
             df_atr = compute_atr(df, period=14)
-            df_calc = compute_ema(df_atr, period=7, column="close", out_col="ema_fast")
+            df_calc = compute_ema(df_atr, period=9, column="close", out_col="ema_fast")
             df_calc = compute_ema(df_calc, period=21, column="close", out_col="ema_slow")
+            df_calc = compute_ema(df_calc, period=50, column="close", out_col="ema_trend")
 
             # Calculate real ATR with minimum sensible floor (0.6% of asset price)
             raw_atr = float(df_calc["atr_14"][-1])
-            min_atr_floor = current_price * 0.006  # e.g. ~$480 on BTC, ~$14 on ETH
+            min_atr_floor = current_price * 0.006  # e.g. ~$480 on BTC
             effective_atr = max(raw_atr, min_atr_floor)
             self.latest_atrs[sym] = effective_atr
 
             # True Crossover Detection
             fast_curr = float(df_calc["ema_fast"][-1])
             slow_curr = float(df_calc["ema_slow"][-1])
+            trend_curr = float(df_calc["ema_trend"][-1])
             fast_prev = float(df_calc["ema_fast"][-2])
             slow_prev = float(df_calc["ema_slow"][-2])
 
@@ -245,14 +247,22 @@ class PaperTradingApp:
             is_golden_cross = (fast_curr > slow_curr) and (fast_prev <= slow_prev)
             is_death_cross = (fast_curr < slow_curr) and (fast_prev >= slow_prev)
 
+            # Academic Filter: Trend Regime Filter (EMA 50/200)
+            trend_long_permitted = current_price > trend_curr
+            trend_short_permitted = current_price < trend_curr
+
+            # Academic Filter: Volatility Regime Spike Filter
+            atr_baseline = float(df_calc["atr_14"].mean() or effective_atr)
+            vol_is_normal = effective_atr <= (atr_baseline * 2.0)
+
             # If this is the initial warmup bar, initialize state without trading
             if prev_state is None:
                 return
 
             signal_dir: SignalDirection | None = None
-            if is_golden_cross:
+            if is_golden_cross and trend_long_permitted and vol_is_normal:
                 signal_dir = SignalDirection.LONG
-            elif is_death_cross:
+            elif is_death_cross and trend_short_permitted and vol_is_normal:
                 signal_dir = SignalDirection.SHORT
 
             if signal_dir is not None:
@@ -260,7 +270,7 @@ class PaperTradingApp:
                     symbol=sym,
                     direction=signal_dir,
                     strength=0.90,
-                    strategy_name="TrendEMA_Cross",
+                    strategy_name="Quant_Regime_EMA",
                     metadata={"atr": effective_atr, "close": current_price},
                 )
                 approved_order = self.risk_manager.evaluate_signal(signal, self.portfolio, current_price)
@@ -280,7 +290,7 @@ class PaperTradingApp:
                         "direction": signal_dir.value,
                         "stop_loss": planned_sl,
                         "take_profit": planned_tp,
-                        "strategy": "TrendEMA_Cross",
+                        "strategy": "Quant_Regime_EMA",
                     }
 
                     self.last_trade_time[sym] = now
